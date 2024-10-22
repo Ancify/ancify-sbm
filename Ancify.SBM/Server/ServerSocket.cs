@@ -8,9 +8,9 @@ using Ancify.SBM.Shared.Transport.TCP;
 
 namespace Ancify.SBM.Server;
 
-public class ServerSocket(int port)
+public class ServerSocket(IPAddress host, int port)
 {
-    private readonly TcpListener _listener = new(IPAddress.Any, port);
+    private readonly TcpListener _listener = new(host, port);
     private readonly ConcurrentDictionary<Guid, ConnectedClientSocket> _clients = new();
 
     public event EventHandler<ClientConnectedEventArgs>? ClientConnected;

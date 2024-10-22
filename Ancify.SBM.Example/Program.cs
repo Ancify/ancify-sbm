@@ -6,7 +6,7 @@ using Ancify.SBM.Shared.Transport.TCP;
 
 Console.WriteLine("Hello, World!");
 
-var serverSocket = new ServerSocket(12345);
+var serverSocket = new ServerSocket(System.Net.IPAddress.Loopback, 12345);
 
 serverSocket.ClientConnected += (s, e) =>
 {
