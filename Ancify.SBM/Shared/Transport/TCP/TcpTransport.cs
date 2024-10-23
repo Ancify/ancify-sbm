@@ -84,6 +84,13 @@ public class TcpTransport : ITransport, IDisposable
             catch (Exception ex)
             {
                 Console.WriteLine($"Failed to read stream: {ex.Message}");
+                if (_stream is not null && !_stream.CanRead)
+                {
+                    Console.WriteLine($"Uh oh, stream was closed! Exiting now.");
+                    // (@todo: maybe check if the deployer process is still running and decide based on that?)
+                    Environment.Exit(0);
+                    break;
+                }
                 continue;
             }
 
