@@ -6,7 +6,7 @@ namespace Ancify.SBM.Shared;
 public abstract class SbmSocket
 {
     protected ITransport? _transport;
-    protected readonly Dictionary<string, List<Func<Message, Task<Message?>>>> _handlers = new();
+    protected readonly Dictionary<string, List<Func<Message, Task<Message?>>>> _handlers = [];
     protected readonly CancellationTokenSource _cts = new();
 
     public Guid ClientId { get; init; }
@@ -31,10 +31,19 @@ public abstract class SbmSocket
 
         Task.Run(async () =>
         {
-            await foreach (var message in _transport.ReceiveAsync(_cts.Token))
+            try
             {
-                await HandleMessageAsync(message);
+                await foreach (var message in _transport.ReceiveAsync(_cts.Token))
+                {
+                    await HandleMessageAsync(message);
+                }
             }
+            catch
+            {
+
+            }
+
+            ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
         });
     }
 

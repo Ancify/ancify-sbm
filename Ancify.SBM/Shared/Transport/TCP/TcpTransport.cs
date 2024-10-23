@@ -58,7 +58,7 @@ public class TcpTransport : ITransport, IDisposable
         await _stream.WriteAsync(data);
     }
 
-    public async IAsyncEnumerable<Message> ReceiveAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public virtual async IAsyncEnumerable<Message> ReceiveAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         while (!_cts.IsCancellationRequested)
         {
@@ -84,13 +84,10 @@ public class TcpTransport : ITransport, IDisposable
             catch (Exception ex)
             {
                 Console.WriteLine($"Failed to read stream: {ex.Message}");
+
                 if (_stream is not null && !_stream.Socket.Connected)
-                {
-                    Console.WriteLine($"Uh oh, stream was closed! Exiting now.");
-                    // (@todo: maybe check if the deployer process is still running and decide based on that?)
-                    Environment.Exit(0);
                     break;
-                }
+
                 continue;
             }
 

@@ -31,4 +31,9 @@ public class ClientSocket : SbmSocket
         request.SenderId = ClientId;
         return base.SendRequestAsync(request, timeout);
     }
+
+    protected override void OnConnectionStatusChanged(ConnectionStatusEventArgs e)
+    {
+        base.OnConnectionStatusChanged(e);
+    }
 }

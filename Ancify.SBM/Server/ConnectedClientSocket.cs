@@ -28,5 +28,15 @@ public class ConnectedClientSocket : SbmSocket
         _server.RemoveClient(ClientId);
         _server.OnClientDisconnected(new ClientDisconnectedEventArgs(this));
     }
+
+    protected override void OnConnectionStatusChanged(ConnectionStatusEventArgs e)
+    {
+        base.OnConnectionStatusChanged(e);
+
+        if (e.Status == ConnectionStatus.Disconnected)
+        {
+            Dispose();
+        }
+    }
 }
 
