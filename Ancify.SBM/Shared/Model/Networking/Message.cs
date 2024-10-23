@@ -1,4 +1,5 @@
 ﻿using MessagePack;
+using MessagePack.Formatters;
 
 namespace Ancify.SBM.Shared.Model.Networking;
 
@@ -9,6 +10,7 @@ public class Message
     public string Channel { get; set; }
 
     [Key(1)]
+    [MessagePackFormatter(typeof(TypelessFormatter))]
     public object? Data { get; set; }
 
     [Key(2)]
