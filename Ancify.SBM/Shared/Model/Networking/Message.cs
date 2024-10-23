@@ -23,6 +23,15 @@ public class Message
     [Key(5)]
     public Guid? TargetId { get; set; }
 
+    public Message() { }
+
+    public Message(string channel, object? data = null, Guid? targetId = null)
+    {
+        Channel = channel;
+        Data = data;
+        TargetId = targetId;
+    }
+
     public T As<T>()
     {
         return (T)Data!;
