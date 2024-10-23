@@ -51,6 +51,11 @@ _ = serverSocket.StartAsync();
 var transport = new TcpTransport("127.0.0.1", 11361);
 var clientSocket = new ClientSocket(transport);
 
+clientSocket.ConnectionStatusChanged += (s, e) =>
+{
+    Console.WriteLine($"Status changed to {e.Status}");
+};
+
 clientSocket.ClientIdReceived += (s, id) =>
 {
     Console.WriteLine($"Assigned Client ID: {id}");
@@ -75,6 +80,7 @@ await clientSocket.SendAsync(new Message
     Data = "Hello, Server!",
 });
 
+/*
 var reply = await clientSocket.SendRequestAsync(new Message
 {
     Channel = "test",
@@ -82,5 +88,6 @@ var reply = await clientSocket.SendRequestAsync(new Message
 });
 
 Console.WriteLine($"Reply: {reply.Data}");
+*/
 
 await Task.Delay(-1);

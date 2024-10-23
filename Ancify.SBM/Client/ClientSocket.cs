@@ -9,7 +9,6 @@ public class ClientSocket : SbmSocket
     public ClientSocket(ITransport transport)
     {
         _transport = transport;
-        _transport.ConnectionStatusChanged += (s, e) => OnConnectionStatusChanged(e);
         StartReceiving();
     }
 
@@ -30,10 +29,5 @@ public class ClientSocket : SbmSocket
     {
         request.SenderId = ClientId;
         return base.SendRequestAsync(request, timeout);
-    }
-
-    protected override void OnConnectionStatusChanged(ConnectionStatusEventArgs e)
-    {
-        base.OnConnectionStatusChanged(e);
     }
 }
