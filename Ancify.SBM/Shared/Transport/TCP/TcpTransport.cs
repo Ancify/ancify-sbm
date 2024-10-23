@@ -51,7 +51,7 @@ public class TcpTransport : ITransport, IDisposable
 
     public async Task SendAsync(Message message)
     {
-        byte[] data = MessagePackSerializer.Serialize(message);
+        byte[] data = MessagePackSerializer.Serialize(message, MessagePack.Resolvers.ContractlessStandardResolver.Options);
         var lengthPrefix = BitConverter.GetBytes(data.Length);
 
         await _stream.WriteAsync(lengthPrefix);
