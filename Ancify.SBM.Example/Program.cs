@@ -48,7 +48,7 @@ serverSocket.ClientConnected += (s, e) =>
 
 _ = serverSocket.StartAsync();
 
-var transport = new TcpTransport("127.0.0.1", 12345);
+var transport = new TcpTransport("127.0.0.1", 11361);
 var clientSocket = new ClientSocket(transport);
 
 clientSocket.ClientIdReceived += (s, id) =>
