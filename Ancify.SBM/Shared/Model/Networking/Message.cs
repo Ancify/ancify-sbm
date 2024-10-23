@@ -6,7 +6,7 @@ namespace Ancify.SBM.Shared.Model.Networking;
 public class Message
 {
     [Key(0)]
-    public required string Channel { get; set; }
+    public string Channel { get; set; }
 
     [Key(1)]
     public object? Data { get; set; }
@@ -23,7 +23,10 @@ public class Message
     [Key(5)]
     public Guid? TargetId { get; set; }
 
-    public Message() { }
+    public Message()
+    {
+        Channel = string.Empty;
+    }
 
     public Message(string channel, object? data = null, Guid? targetId = null)
     {
