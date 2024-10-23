@@ -23,6 +23,11 @@ public class Message
     [Key(5)]
     public Guid? TargetId { get; set; }
 
+    public T As<T>()
+    {
+        return (T)Data!;
+    }
+
     public bool SenderIsServer()
     {
         return SenderId == Guid.Empty;
