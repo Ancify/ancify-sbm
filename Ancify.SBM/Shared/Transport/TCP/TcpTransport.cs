@@ -41,12 +41,48 @@ public class TcpTransport : ITransport, IDisposable
         _isServer = false;
     }
 
-    public async Task ConnectAsync()
+    public async Task ConnectAsync(int maxRetries = 5, int delayMilliseconds = 1000)
     {
+        int attempt = 0;
         ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Connecting));
-        await _client.ConnectAsync(_host, _port);
-        _stream = _client.GetStream();
-        ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Connected));
+
+        while (attempt < maxRetries)
+        {
+            try
+            {
+                await _client.ConnectAsync(_host, _port);
+                _stream = _client.GetStream();
+                ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Connected));
+                return;
+            }
+            catch (SocketException ex)
+            {
+                attempt++;
+                Console.WriteLine($"Attempt {attempt} failed: {ex.Message}");
+
+                if (attempt >= maxRetries)
+                {
+                    ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Failed));
+                    throw new InvalidOperationException($"Failed to connect to {_host}:{_port} after {maxRetries} attempts.", ex);
+                }
+
+                // Wait before retrying (exponential backoff)
+                int waitTime = delayMilliseconds * (int)Math.Pow(2, attempt - 1);
+                await Task.Delay(waitTime);
+
+                if (_cts.Token.IsCancellationRequested)
+                {
+                    ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Cancelled));
+                    throw new TaskCanceledException("Connection attempt cancelled.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Unexpected error: {ex.Message}");
+                ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Failed));
+                throw;
+            }
+        }
     }
 
     public async Task SendAsync(Message message)
