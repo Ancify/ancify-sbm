@@ -83,8 +83,8 @@ public abstract class SbmSocket
     {
         if (!_handlers.TryGetValue(channel, out var handlers))
         {
-            handlers = [];
-            _handlers[channel] = handlers;
+            _handlers[channel] = [];
+            handlers = _handlers[channel];
         }
         handlers.Add(handler);
 
@@ -164,7 +164,7 @@ public abstract class SbmSocket
 
         Action unregister = null!;
 
-        unregister = On($"{request.Channel}_reply", message =>
+        unregister = On($"{request.Channel}_reply_{replyId}", message =>
         {
             if (message.ReplyTo == replyId)
             {

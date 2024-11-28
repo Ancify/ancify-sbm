@@ -40,15 +40,12 @@ serverSocket.ClientConnected += (s, e) =>
         return null;
     });
 
-    e.ClientSocket.On("test", async message =>
-    {
-        return Message.FromReply(message, "reply!");
-    });
+    e.ClientSocket.On("test", message => Message.FromReply(message, "reply!"));
 };
 
 _ = serverSocket.StartAsync();
 
-var transport = new TcpTransport("127.0.0.1", 11361);
+var transport = new TcpTransport("127.0.0.1", 12345);
 var clientSocket = new ClientSocket(transport);
 
 clientSocket.ConnectionStatusChanged += (s, e) =>
@@ -80,7 +77,7 @@ await clientSocket.SendAsync(new Message
     Data = "Hello, Server!",
 });
 
-/*
+
 var reply = await clientSocket.SendRequestAsync(new Message
 {
     Channel = "test",
@@ -88,6 +85,5 @@ var reply = await clientSocket.SendRequestAsync(new Message
 });
 
 Console.WriteLine($"Reply: {reply.Data}");
-*/
 
 await Task.Delay(-1);

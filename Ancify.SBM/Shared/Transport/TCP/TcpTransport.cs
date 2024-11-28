@@ -88,10 +88,32 @@ public class TcpTransport : ITransport, IDisposable
     public async Task SendAsync(Message message)
     {
         byte[] data = MessagePackSerializer.Serialize(message);
+
+        /*
+#if DEBUG
+        var deserializedMessage = MessagePackSerializer.Deserialize<Message>(data);
+
+        if (!AreMessagesEqual(message, deserializedMessage))
+        {
+            throw new InvalidOperationException("Serialization validation failed. The deserialized object does not match the original.");
+        }
+#endif
+        */
+
         var lengthPrefix = BitConverter.GetBytes(data.Length);
 
         await _stream.WriteAsync(lengthPrefix);
         await _stream.WriteAsync(data);
+    }
+
+    private static bool AreMessagesEqual(Message original, Message deserialized)
+    {
+        return original.Channel == deserialized.Channel &&
+               Equals(original.Data, deserialized.Data) &&
+               original.ReplyTo == deserialized.ReplyTo &&
+               original.MessageId == deserialized.MessageId &&
+               original.SenderId == deserialized.SenderId &&
+               original.TargetId == deserialized.TargetId;
     }
 
     public virtual async IAsyncEnumerable<Message> ReceiveAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)

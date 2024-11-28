@@ -37,6 +37,17 @@ public class Message
         TargetId = targetId;
     }
 
+    [SerializationConstructor]
+    public Message(string channel, object? data, Guid? replyTo, Guid messageId, Guid senderId, Guid? targetId)
+    {
+        Channel = channel;
+        Data = data;
+        ReplyTo = replyTo;
+        MessageId = messageId;
+        SenderId = senderId;
+        TargetId = targetId;
+    }
+
     public T As<T>()
     {
         return (T)Data!;
@@ -51,7 +62,7 @@ public class Message
     {
         return new Message
         {
-            Channel = $"{source.Channel}_reply",
+            Channel = $"{source.Channel}_reply_{source.MessageId}",
             SenderId = source.TargetId ?? Guid.Empty,
             TargetId = source.SenderId,
             ReplyTo = source.MessageId,
