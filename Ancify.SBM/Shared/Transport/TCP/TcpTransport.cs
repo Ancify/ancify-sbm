@@ -20,6 +20,8 @@ public class TcpTransport : ITransport, IDisposable
     public event EventHandler<ConnectionStatusEventArgs>? ConnectionStatusChanged;
     private readonly bool _isServer = false;
 
+    private readonly SemaphoreSlim _streamWriteLock = new(1, 1);
+
     public TcpTransport(TcpClient client)
     {
         _client = client;
@@ -102,8 +104,17 @@ public class TcpTransport : ITransport, IDisposable
 
         var lengthPrefix = BitConverter.GetBytes(data.Length);
 
-        await _stream.WriteAsync(lengthPrefix);
-        await _stream.WriteAsync(data);
+        await _streamWriteLock.WaitAsync();
+
+        try
+        {
+            await _stream.WriteAsync(lengthPrefix);
+            await _stream.WriteAsync(data);
+        }
+        finally
+        {
+            _streamWriteLock.Release();
+        }
     }
 
     private static bool AreMessagesEqual(Message original, Message deserialized)

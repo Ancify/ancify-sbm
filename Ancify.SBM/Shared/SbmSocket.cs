@@ -35,12 +35,19 @@ public abstract class SbmSocket
             {
                 await foreach (var message in _transport.ReceiveAsync(_cts.Token))
                 {
-                    await HandleMessageAsync(message);
+                    try
+                    {
+                        await HandleMessageAsync(message);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"An exception occured while handling the message: {ex.Message}");
+                    }
                 }
             }
-            catch
+            catch (Exception ex)
             {
-
+                Console.WriteLine($"An exception occured: {ex.Message}");
             }
 
             ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
@@ -51,7 +58,10 @@ public abstract class SbmSocket
     {
         if (_handlers.TryGetValue(message.Channel, out var handlers))
         {
-            foreach (var handler in handlers)
+            // Create a copy of the handlers list to safely iterate over it
+            var handlersCopy = handlers.ToList();
+
+            foreach (var handler in handlersCopy)
             {
                 var responseTask = handler?.Invoke(message);
 
