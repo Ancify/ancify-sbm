@@ -5,6 +5,7 @@ public enum ConnectionStatus
     Connected,
     Disconnected,
     Authenticating,
+    Authenticated,
     Failed,
     Cancelled
 }

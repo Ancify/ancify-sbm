@@ -8,4 +8,5 @@ public interface ITransport
     Task SendAsync(Message message);
     IAsyncEnumerable<Message> ReceiveAsync(CancellationToken cancellationToken = default);
     event EventHandler<ConnectionStatusEventArgs>? ConnectionStatusChanged;
+    void OnAuthenticated();
 }

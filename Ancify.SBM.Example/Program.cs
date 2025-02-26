@@ -1,12 +1,18 @@
 ﻿// See https://aka.ms/new-console-template for more information
 using Ancify.SBM.Client;
+using Ancify.SBM.Example;
 using Ancify.SBM.Server;
 using Ancify.SBM.Shared.Model.Networking;
 using Ancify.SBM.Shared.Transport.TCP;
 
 Console.WriteLine("Hello, World!");
 
-var serverSocket = new ServerSocket(System.Net.IPAddress.Loopback, 12345);
+var sslConfig = CertificateHelper.CreateDevSslConfig("./dev.pfx", password: "abcd");
+sslConfig.RejectUnauthorized = false;
+sslConfig.SslEnabled = true;
+
+// @todo: dissallow by default & handler exceptions (anonymous handlers)
+var serverSocket = new ServerSocket(System.Net.IPAddress.Loopback, 12345, sslConfig, (id, key) => Task.FromResult(true));
 
 serverSocket.ClientConnected += (s, e) =>
 {
@@ -14,6 +20,8 @@ serverSocket.ClientConnected += (s, e) =>
 
     e.ClientSocket.On("message", async message =>
     {
+        e.ClientSocket.AuthenticationGuard();
+
         Console.WriteLine($"Received message from {message.SenderId}: {message.Data}");
 
         // Send acknowledgment back to sender
@@ -45,7 +53,7 @@ serverSocket.ClientConnected += (s, e) =>
 
 _ = serverSocket.StartAsync();
 
-var transport = new TcpTransport("127.0.0.1", 12345);
+var transport = new TcpTransport("127.0.0.1", 12345, sslConfig);
 var clientSocket = new ClientSocket(transport);
 
 clientSocket.ConnectionStatusChanged += (s, e) =>
@@ -59,6 +67,7 @@ clientSocket.ClientIdReceived += (s, id) =>
 };
 
 await clientSocket.ConnectAsync();
+await clientSocket.AuthenticateAsync("testid", "key");
 
 clientSocket.On("message_received", message =>
 {

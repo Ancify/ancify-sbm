@@ -14,6 +14,37 @@ public class ConnectedClientSocket : SbmSocket
         _transport.ConnectionStatusChanged += (s, e) => OnConnectionStatusChanged(e);
         _server = server;
         StartReceiving();
+        SetupAuthHandlers();
+    }
+
+    private void SetupAuthHandlers()
+    {
+        On("_auth_", async message =>
+        {
+            AuthStatus = AuthStatus.Authenticating;
+
+            var data = message.AsTypeless();
+
+            var id = (string)data["Id"];
+            var key = (string)data["Key"];
+
+            var handlerTask = _server.AuthHandler?.Invoke(id, key);
+
+            if (handlerTask is not null)
+            {
+                if (!await handlerTask)
+                {
+                    AuthStatus = AuthStatus.Failed;
+                    return Message.FromReply(message, new { Success = false });
+                }
+            }
+
+            AuthStatus = AuthStatus.Authenticated;
+
+            _transport?.OnAuthenticated();
+
+            return Message.FromReply(message, new { Success = true });
+        });
     }
 
     protected override async Task HandleMessageAsync(Message message)

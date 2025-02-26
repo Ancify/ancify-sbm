@@ -53,6 +53,11 @@ public class Message
         return (T)Data!;
     }
 
+    public IReadOnlyDictionary<object, object> AsTypeless()
+    {
+        return (IReadOnlyDictionary<object, object>)Data!;
+    }
+
     public bool SenderIsServer()
     {
         return SenderId == Guid.Empty;

@@ -3,11 +3,22 @@ using Ancify.SBM.Shared.Model.Networking;
 
 namespace Ancify.SBM.Shared;
 
+public enum AuthStatus
+{
+    None,
+    Anonymous,
+    Authenticating,
+    Authenticated,
+    Failed
+}
+
 public abstract class SbmSocket
 {
     protected ITransport? _transport;
     protected readonly Dictionary<string, List<Func<Message, Task<Message?>>>> _handlers = [];
     protected readonly CancellationTokenSource _cts = new();
+
+    public AuthStatus AuthStatus { get; protected set; }
 
     public Guid ClientId { get; init; }
 
@@ -63,21 +74,28 @@ public abstract class SbmSocket
 
             foreach (var handler in handlersCopy)
             {
-                var responseTask = handler?.Invoke(message);
-
-                if (responseTask is null)
-                    continue;
-
-                var response = await responseTask;
-
-                if (response != null)
+                try
                 {
-                    response.ReplyTo = message.MessageId;
-                    response.TargetId = message.SenderId;
-                    response.SenderId = ClientId;
+                    var responseTask = handler?.Invoke(message);
 
-                    if (_transport != null)
-                        await _transport.SendAsync(response);
+                    if (responseTask is null)
+                        continue;
+
+                    var response = await responseTask;
+
+                    if (response != null)
+                    {
+                        response.ReplyTo = message.MessageId;
+                        response.TargetId = message.SenderId;
+                        response.SenderId = ClientId;
+
+                        if (_transport != null)
+                            await _transport.SendAsync(response);
+                    }
+                }
+                catch
+                {
+                    // @todo: logging
                 }
             }
         }
@@ -194,6 +212,17 @@ public abstract class SbmSocket
             unregister();
             throw new TimeoutException("Request timed out.");
         }
+    }
+
+    public bool IsAuthenticated()
+    {
+        return AuthStatus == AuthStatus.Authenticated;
+    }
+
+    public void AuthenticationGuard()
+    {
+        if (!IsAuthenticated())
+            throw new UnauthorizedAccessException();
     }
 
     public virtual void Dispose()

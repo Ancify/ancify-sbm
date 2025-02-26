@@ -12,11 +12,29 @@ public class ClientSocket : SbmSocket
         StartReceiving();
     }
 
+
     public async Task ConnectAsync()
     {
         OnConnectionStatusChanged(new ConnectionStatusEventArgs(ConnectionStatus.Connecting));
         await _transport!.ConnectAsync();
         OnConnectionStatusChanged(new ConnectionStatusEventArgs(ConnectionStatus.Connected));
+
+    }
+    public async Task<bool> AuthenticateAsync(string id, string key)
+    {
+        var message = new Message("_auth_", new { Id = id, Key = key });
+        var response = await SendRequestAsync(message);
+
+        var data = response.AsTypeless();
+
+        var success = (bool)data["Success"];
+
+        if (success)
+        {
+            _transport?.OnAuthenticated();
+        }
+
+        return success;
     }
 
     public override Task SendAsync(Message message)

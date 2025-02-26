@@ -8,7 +8,7 @@ using Ancify.SBM.Shared.Transport.TCP;
 
 namespace Ancify.SBM.Server;
 
-public class ServerSocket(IPAddress host, int port)
+public class ServerSocket(IPAddress host, int port, SslConfig sslConfig, Func<string, string, Task<bool>>? authHandler = null)
 {
     private readonly TcpListener _listener = new(host, port);
     private readonly ConcurrentDictionary<Guid, ConnectedClientSocket> _clients = new();
@@ -16,23 +16,34 @@ public class ServerSocket(IPAddress host, int port)
     public event EventHandler<ClientConnectedEventArgs>? ClientConnected;
     public event EventHandler<ClientDisconnectedEventArgs>? ClientDisconnected;
 
+    public Func<string, string, Task<bool>>? AuthHandler { get => authHandler; }
+
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         _listener.Start();
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            var tcpClient = await _listener.AcceptTcpClientAsync(cancellationToken);
-            var transport = new TcpTransport(tcpClient);
-
-            var clientSocket = new ConnectedClientSocket(transport, this)
+            try
             {
-                ClientId = Guid.NewGuid()
-            };
+                var tcpClient = await _listener.AcceptTcpClientAsync(cancellationToken);
+                var transport = new TcpTransport(tcpClient, sslConfig);
 
-            _clients[clientSocket.ClientId] = clientSocket;
+                await transport.SetupServerStream();
 
-            ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
+                var clientSocket = new ConnectedClientSocket(transport, this)
+                {
+                    ClientId = Guid.NewGuid()
+                };
+
+                _clients[clientSocket.ClientId] = clientSocket;
+
+                ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
+            }
+            catch
+            {
+                // @todo: logging
+            }
         }
     }
 

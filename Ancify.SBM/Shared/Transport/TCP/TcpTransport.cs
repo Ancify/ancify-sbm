@@ -1,6 +1,9 @@
 ﻿using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 
 using Ancify.SBM.Interfaces;
 using Ancify.SBM.Shared.Model.Networking;
@@ -9,31 +12,40 @@ using MessagePack;
 
 namespace Ancify.SBM.Shared.Transport.TCP;
 
+public class SslConfig
+{
+    public X509Certificate2? Certificate { get; set; }
+    public bool SslEnabled { get; set; }
+    public bool RejectUnauthorized { get; set; } = true;
+}
+
 public class TcpTransport : ITransport, IDisposable
 {
     private readonly TcpClient _client;
-    private NetworkStream _stream;
+    private Stream _stream;
     private readonly CancellationTokenSource _cts;
     private readonly string _host;
     private readonly ushort _port;
-
     public event EventHandler<ConnectionStatusEventArgs>? ConnectionStatusChanged;
     private readonly bool _isServer = false;
-
+    private bool _isSettingUpSsl = false;
+    private readonly SslConfig _sslConfig;
     private readonly SemaphoreSlim _streamWriteLock = new(1, 1);
 
-    public TcpTransport(TcpClient client)
+    // Server constructor – accepts an already connected TcpClient
+    public TcpTransport(TcpClient client, SslConfig sslConfig)
     {
         _client = client;
-        _stream = client.GetStream();
         _cts = new CancellationTokenSource();
-        ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Connected));
         _host = ((IPEndPoint)_client.Client.RemoteEndPoint!).Address.ToString();
         _port = (ushort)((IPEndPoint)_client.Client.RemoteEndPoint!).Port;
         _isServer = true;
+        _sslConfig = sslConfig;
+        _stream = client.GetStream();
     }
 
-    public TcpTransport(string host, ushort port)
+    // Client constructor – connection will be initiated later in ConnectAsync
+    public TcpTransport(string host, ushort port, SslConfig sslConfig)
     {
         _host = host;
         _port = port;
@@ -41,6 +53,37 @@ public class TcpTransport : ITransport, IDisposable
         _cts = new CancellationTokenSource();
         _stream = null!;
         _isServer = false;
+        _sslConfig = sslConfig;
+    }
+
+    public async Task SetupServerStream()
+    {
+        if (_sslConfig.SslEnabled)
+        {
+            _isSettingUpSsl = true;
+
+            if (_sslConfig.Certificate == null)
+                throw new InvalidOperationException("SSL is enabled but no certificate was provided for server authentication.");
+
+            // Wrap the underlying stream in an SslStream
+            var sslStream = new SslStream(_client.GetStream(), false);
+            _stream = sslStream;
+            // Synchronously perform the server handshake using the certbot certificate.
+            await sslStream.AuthenticateAsServerAsync(
+                _sslConfig.Certificate,
+                clientCertificateRequired: false,
+                enabledSslProtocols: SslProtocols.Tls12 | SslProtocols.Tls13,
+                checkCertificateRevocation: _sslConfig.RejectUnauthorized
+            );
+
+            _isSettingUpSsl = false;
+        }
+        else
+        {
+            _stream = _client.GetStream();
+        }
+
+        ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Connected));
     }
 
     public async Task ConnectAsync(int maxRetries = 5, int delayMilliseconds = 1000)
@@ -53,7 +96,32 @@ public class TcpTransport : ITransport, IDisposable
             try
             {
                 await _client.ConnectAsync(_host, _port);
-                _stream = _client.GetStream();
+                var networkStream = _client.GetStream();
+
+                if (_sslConfig.SslEnabled)
+                {
+                    _isSettingUpSsl = true;
+                    // Create an SslStream with a certificate validation callback.
+                    var sslStream = new SslStream(networkStream, false, (sender, certificate, chain, sslPolicyErrors) =>
+                    {
+                        // If RejectUnauthorized is false, accept any certificate.
+                        return !_sslConfig.RejectUnauthorized ? true : sslPolicyErrors == SslPolicyErrors.None;
+                    });
+                    _stream = sslStream;
+                    // Perform the client-side handshake.
+                    await sslStream.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                    {
+                        TargetHost = _host,
+                        EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                        CertificateRevocationCheckMode = X509RevocationMode.Online,
+                    });
+                    _isSettingUpSsl = false;
+                }
+                else
+                {
+                    _stream = networkStream;
+                }
+
                 ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Connected));
                 return;
             }
@@ -87,25 +155,17 @@ public class TcpTransport : ITransport, IDisposable
         }
     }
 
+    public void OnAuthenticated()
+    {
+        ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Authenticated));
+    }
+
     public async Task SendAsync(Message message)
     {
         byte[] data = MessagePackSerializer.Serialize(message);
-
-        /*
-#if DEBUG
-        var deserializedMessage = MessagePackSerializer.Deserialize<Message>(data);
-
-        if (!AreMessagesEqual(message, deserializedMessage))
-        {
-            throw new InvalidOperationException("Serialization validation failed. The deserialized object does not match the original.");
-        }
-#endif
-        */
-
         var lengthPrefix = BitConverter.GetBytes(data.Length);
 
         await _streamWriteLock.WaitAsync();
-
         try
         {
             await _stream.WriteAsync(lengthPrefix);
@@ -135,7 +195,7 @@ public class TcpTransport : ITransport, IDisposable
 
             try
             {
-                if (_stream is not null)
+                if (_stream is not null && !_isSettingUpSsl)
                 {
                     int read = await _stream.ReadAsync(lengthPrefix.AsMemory(0, 4), cancellationToken);
 
@@ -147,6 +207,7 @@ public class TcpTransport : ITransport, IDisposable
                 }
                 else
                 {
+                    await Task.Delay(10, cancellationToken);
                     continue;
                 }
             }
@@ -154,7 +215,7 @@ public class TcpTransport : ITransport, IDisposable
             {
                 Console.WriteLine($"Failed to read stream: {ex.Message}");
 
-                if (_stream is not null && !_stream.Socket.Connected)
+                if (_stream is not null && !_client.Client.Connected)
                     break;
 
                 continue;
@@ -176,7 +237,6 @@ public class TcpTransport : ITransport, IDisposable
             }
 
             var message = MessagePackSerializer.Deserialize<Message>(data, cancellationToken: cancellationToken);
-
             yield return message;
         }
     }
