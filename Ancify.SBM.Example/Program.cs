@@ -3,6 +3,7 @@ using Ancify.SBM.Client;
 using Ancify.SBM.Example;
 using Ancify.SBM.Server;
 using Ancify.SBM.Shared;
+using Ancify.SBM.Shared.Model;
 using Ancify.SBM.Shared.Model.Networking;
 using Ancify.SBM.Shared.Transport.TCP;
 
@@ -24,7 +25,7 @@ sslConfig.SslEnabled = false;
 
 
 // @todo: dissallow by default & handler exceptions (anonymous handlers)
-var serverSocket = new ServerSocket(System.Net.IPAddress.Loopback, 12345, sslConfig, (id, key) => Task.FromResult(true));
+var serverSocket = new ServerSocket(System.Net.IPAddress.Loopback, 12345, sslConfig, (id, key) => Task.FromResult(new AuthContext("1234", [])));
 
 serverSocket.ClientConnected += (s, e) =>
 {

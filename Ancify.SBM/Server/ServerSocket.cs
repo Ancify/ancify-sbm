@@ -3,12 +3,15 @@ using System.Net;
 using System.Net.Sockets;
 
 using Ancify.SBM.Shared;
+using Ancify.SBM.Shared.Model;
 using Ancify.SBM.Shared.Model.Networking;
 using Ancify.SBM.Shared.Transport.TCP;
 
+using Microsoft.Extensions.Logging;
+
 namespace Ancify.SBM.Server;
 
-public class ServerSocket(IPAddress host, int port, SslConfig sslConfig, Func<string, string, Task<bool>>? authHandler = null)
+public class ServerSocket(IPAddress host, int port, SslConfig sslConfig, Func<string, string, Task<AuthContext>>? authHandler = null)
 {
     private readonly TcpListener _listener = new(host, port);
     private readonly ConcurrentDictionary<Guid, ConnectedClientSocket> _clients = new();
@@ -16,7 +19,7 @@ public class ServerSocket(IPAddress host, int port, SslConfig sslConfig, Func<st
     public event EventHandler<ClientConnectedEventArgs>? ClientConnected;
     public event EventHandler<ClientDisconnectedEventArgs>? ClientDisconnected;
 
-    public Func<string, string, Task<bool>>? AuthHandler { get => authHandler; }
+    public Func<string, string, Task<AuthContext>>? AuthHandler { get => authHandler; }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -40,9 +43,9 @@ public class ServerSocket(IPAddress host, int port, SslConfig sslConfig, Func<st
 
                 ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
             }
-            catch
+            catch (Exception ex)
             {
-                // @todo: logging
+                SbmLogger.Get()?.LogError(ex, "Unexpected exception on client connection");
             }
         }
     }

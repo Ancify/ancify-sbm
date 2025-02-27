@@ -1,5 +1,6 @@
 ﻿using Ancify.SBM.Interfaces;
 using Ancify.SBM.Shared;
+using Ancify.SBM.Shared.Model;
 using Ancify.SBM.Shared.Model.Networking;
 
 namespace Ancify.SBM.Server;
@@ -8,8 +9,11 @@ public class ConnectedClientSocket : SbmSocket
 {
     private readonly ServerSocket _server;
 
+    public AuthContext Context { get; protected set; }
+
     public ConnectedClientSocket(ITransport transport, ServerSocket server) : base(transport)
     {
+        Context = new();
         _server = server;
         StartReceiving();
         SetupAuthHandlers();
@@ -30,7 +34,10 @@ public class ConnectedClientSocket : SbmSocket
 
             if (handlerTask is not null)
             {
-                if (!await handlerTask)
+                var result = await handlerTask;
+                Context = result;
+
+                if (!result.Success)
                 {
                     AuthStatus = AuthStatus.Failed;
                     return Message.FromReply(message, new { Success = false });
@@ -65,6 +72,14 @@ public class ConnectedClientSocket : SbmSocket
         if (e.Status == ConnectionStatus.Disconnected)
         {
             Dispose();
+        }
+    }
+
+    public void AuthenticationGuard(string role)
+    {
+        if (!IsAuthenticated() || !Context.Success || !Context.Roles.Contains(role))
+        {
+            throw new UnauthorizedAccessException();
         }
     }
 }
