@@ -12,27 +12,62 @@ public enum AuthStatus
     Failed
 }
 
+public enum EventType
+{
+    ConnectionStatusChanged,
+    ClientIdReceived
+}
+
 public abstract class SbmSocket
 {
-    protected ITransport? _transport;
+    protected ITransport _transport;
     protected readonly Dictionary<string, List<Func<Message, Task<Message?>>>> _handlers = [];
+    protected readonly Dictionary<EventType, List<Func<object?, Task>>> _eventHandlers = [];
     protected readonly CancellationTokenSource _cts = new();
+
+    public SbmSocket(ITransport transport)
+    {
+        _transport = transport;
+        _transport.ConnectionStatusChanged += (s, e) => OnConnectionStatusChanged(e);
+    }
 
     public AuthStatus AuthStatus { get; protected set; }
 
     public Guid ClientId { get; init; }
 
-    public event EventHandler<ConnectionStatusEventArgs>? ConnectionStatusChanged;
-    public event EventHandler<Guid>? ClientIdReceived;
-
     protected virtual void OnConnectionStatusChanged(ConnectionStatusEventArgs e)
     {
-        ConnectionStatusChanged?.Invoke(this, e);
+        BroadcastEvent(EventType.ConnectionStatusChanged, e);
     }
 
     protected virtual void OnClientIdReceived(Guid clientId)
     {
-        ClientIdReceived?.Invoke(this, clientId);
+        BroadcastEvent(EventType.ClientIdReceived, clientId);
+    }
+
+    public async void BroadcastEvent(EventType eventType, object? args = null)
+    {
+        if (_eventHandlers.TryGetValue(eventType, out var handlers))
+        {
+            var handlersCopy = handlers.ToList();
+
+            foreach (var handler in handlersCopy)
+            {
+                try
+                {
+                    var responseTask = handler?.Invoke(args);
+
+                    if (responseTask is null)
+                        continue;
+
+                    await responseTask;
+                }
+                catch
+                {
+                    // @todo: logging
+                }
+            }
+        }
     }
 
     internal void StartReceiving()
@@ -61,7 +96,7 @@ public abstract class SbmSocket
                 Console.WriteLine($"An exception occured: {ex.Message}");
             }
 
-            ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
+            OnConnectionStatusChanged(new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
         });
     }
 
@@ -170,6 +205,60 @@ public abstract class SbmSocket
             return Task.FromResult<Message?>(null);
         });
     }
+
+    public Action On(EventType eventType, Func<object?, Task> handler)
+    {
+        if (!_eventHandlers.TryGetValue(eventType, out var handlers))
+        {
+            _eventHandlers[eventType] = [];
+            handlers = _eventHandlers[eventType];
+        }
+        handlers.Add(handler);
+
+        return () =>
+        {
+            handlers.Remove(handler);
+            if (handlers.Count == 0)
+            {
+                _eventHandlers.Remove(eventType);
+            }
+        };
+    }
+
+    public Action On<EventArgsType>(EventType eventType, Func<EventArgsType, Task> handler)
+    {
+        Task WrappedHandler(object? arg) => handler((EventArgsType)arg!);
+        return On(eventType, WrappedHandler);
+    }
+
+    /// <summary>
+    /// Registers a synchronous handler.
+    /// </summary>
+    /// <param name="eventType">The event type to listen on.</param>
+    /// <param name="handler">A function that processes the event.</param>
+    /// <returns>An action that unregisters the handler when called.</returns>
+    public Action On(EventType eventType, Action<object?> handler)
+    {
+        Task WrappedHandler(object? arg)
+        {
+            handler(arg);
+            return Task.CompletedTask;
+        }
+        return On(eventType, WrappedHandler);
+    }
+
+    /// <summary>
+    /// Registers a synchronous handler with specific event args type.
+    /// </summary>
+    /// <param name="eventType">The event type to listen on.</param>
+    /// <param name="handler">A function that processes the event.</param>
+    /// <returns>An action that unregisters the handler when called.</returns>
+    public Action On<EventArgsType>(EventType eventType, Action<EventArgsType> handler)
+    {
+        void WrappedHandler(object? arg) => handler((EventArgsType)arg!);
+        return On(eventType, WrappedHandler);
+    }
+
 
     public virtual Task SendAsync(Message message)
     {

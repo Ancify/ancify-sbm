@@ -2,6 +2,7 @@
 using Ancify.SBM.Client;
 using Ancify.SBM.Example;
 using Ancify.SBM.Server;
+using Ancify.SBM.Shared;
 using Ancify.SBM.Shared.Model.Networking;
 using Ancify.SBM.Shared.Transport.TCP;
 
@@ -9,7 +10,7 @@ Console.WriteLine("Hello, World!");
 
 var sslConfig = CertificateHelper.CreateDevSslConfig("./dev.pfx", password: "abcd");
 sslConfig.RejectUnauthorized = false;
-sslConfig.SslEnabled = true;
+sslConfig.SslEnabled = false;
 
 // @todo: dissallow by default & handler exceptions (anonymous handlers)
 var serverSocket = new ServerSocket(System.Net.IPAddress.Loopback, 12345, sslConfig, (id, key) => Task.FromResult(true));
@@ -56,15 +57,10 @@ _ = serverSocket.StartAsync();
 var transport = new TcpTransport("127.0.0.1", 12345, sslConfig);
 var clientSocket = new ClientSocket(transport);
 
-clientSocket.ConnectionStatusChanged += (s, e) =>
+clientSocket.On<ConnectionStatusEventArgs>(EventType.ConnectionStatusChanged, args =>
 {
-    Console.WriteLine($"Status changed to {e.Status}");
-};
-
-clientSocket.ClientIdReceived += (s, id) =>
-{
-    Console.WriteLine($"Assigned Client ID: {id}");
-};
+    Console.WriteLine($"Status changed to {args.Status}");
+});
 
 await clientSocket.ConnectAsync();
 await clientSocket.AuthenticateAsync("testid", "key");

@@ -8,10 +8,8 @@ public class ConnectedClientSocket : SbmSocket
 {
     private readonly ServerSocket _server;
 
-    public ConnectedClientSocket(ITransport transport, ServerSocket server)
+    public ConnectedClientSocket(ITransport transport, ServerSocket server) : base(transport)
     {
-        _transport = transport;
-        _transport.ConnectionStatusChanged += (s, e) => OnConnectionStatusChanged(e);
         _server = server;
         StartReceiving();
         SetupAuthHandlers();

@@ -6,18 +6,15 @@ namespace Ancify.SBM.Client;
 
 public class ClientSocket : SbmSocket
 {
-    public ClientSocket(ITransport transport)
+    public ClientSocket(ITransport transport) : base(transport)
     {
-        _transport = transport;
         StartReceiving();
     }
 
 
     public async Task ConnectAsync()
     {
-        OnConnectionStatusChanged(new ConnectionStatusEventArgs(ConnectionStatus.Connecting));
         await _transport!.ConnectAsync();
-        OnConnectionStatusChanged(new ConnectionStatusEventArgs(ConnectionStatus.Connected));
 
     }
     public async Task<bool> AuthenticateAsync(string id, string key)
