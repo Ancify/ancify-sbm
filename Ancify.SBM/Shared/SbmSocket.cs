@@ -1,6 +1,8 @@
 ﻿using Ancify.SBM.Interfaces;
 using Ancify.SBM.Shared.Model.Networking;
 
+using Microsoft.Extensions.Logging;
+
 namespace Ancify.SBM.Shared;
 
 public enum AuthStatus
@@ -62,9 +64,9 @@ public abstract class SbmSocket
 
                     await responseTask;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // @todo: logging
+                    SbmLogger.Get()?.LogError(ex, "Failed to broadcast event {EventType}.", eventType);
                 }
             }
         }
@@ -88,12 +90,13 @@ public abstract class SbmSocket
                     catch (Exception ex)
                     {
                         Console.WriteLine($"An exception occured while handling the message: {ex.Message}");
+                        SbmLogger.Get()?.LogError(ex, "An exception occured while handling the message.");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"An exception occured: {ex.Message}");
+                SbmLogger.Get()?.LogError(ex, "An exception occured while receiving data.");
             }
 
             OnConnectionStatusChanged(new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
@@ -128,9 +131,9 @@ public abstract class SbmSocket
                             await _transport.SendAsync(response);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // @todo: logging
+                    SbmLogger.Get()?.LogError(ex, "Failed to handle message.");
                 }
             }
         }

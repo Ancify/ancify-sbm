@@ -6,11 +6,22 @@ using Ancify.SBM.Shared;
 using Ancify.SBM.Shared.Model.Networking;
 using Ancify.SBM.Shared.Transport.TCP;
 
+using Microsoft.Extensions.Logging;
+
 Console.WriteLine("Hello, World!");
+
+using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
+{
+    builder.SetMinimumLevel(LogLevel.Information);
+    builder.AddConsole();
+});
+
+SbmLogger.SetLoggerFromFactory(loggerFactory);
 
 var sslConfig = CertificateHelper.CreateDevSslConfig("./dev.pfx", password: "abcd");
 sslConfig.RejectUnauthorized = false;
 sslConfig.SslEnabled = false;
+
 
 // @todo: dissallow by default & handler exceptions (anonymous handlers)
 var serverSocket = new ServerSocket(System.Net.IPAddress.Loopback, 12345, sslConfig, (id, key) => Task.FromResult(true));

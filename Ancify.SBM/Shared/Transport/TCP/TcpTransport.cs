@@ -10,6 +10,8 @@ using Ancify.SBM.Shared.Model.Networking;
 
 using MessagePack;
 
+using Microsoft.Extensions.Logging;
+
 namespace Ancify.SBM.Shared.Transport.TCP;
 
 public class SslConfig
@@ -128,7 +130,7 @@ public class TcpTransport : ITransport, IDisposable
             catch (SocketException ex)
             {
                 attempt++;
-                Console.WriteLine($"Attempt {attempt} failed: {ex.Message}");
+                SbmLogger.Get()?.LogError(ex, "Attempt {attempt} failed", attempt);
 
                 if (attempt >= maxRetries)
                 {
@@ -148,7 +150,7 @@ public class TcpTransport : ITransport, IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Unexpected error: {ex.Message}");
+                SbmLogger.Get()?.LogError(ex, "Unexpected exception");
                 ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Failed));
                 throw;
             }
@@ -213,7 +215,7 @@ public class TcpTransport : ITransport, IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Failed to read stream: {ex.Message}");
+                SbmLogger.Get()?.LogError(ex, "Failed to read stream.");
 
                 if (_stream is not null && !_client.Client.Connected)
                     break;
