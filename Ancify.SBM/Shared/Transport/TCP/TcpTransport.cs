@@ -251,4 +251,9 @@ public class TcpTransport : ITransport, IDisposable
         _client?.Close();
         ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
     }
+
+    public void Close()
+    {
+        Dispose();
+    }
 }

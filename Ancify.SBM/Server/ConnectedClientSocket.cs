@@ -41,6 +41,12 @@ public class ConnectedClientSocket : SbmSocket
                 if (!result.Success)
                 {
                     AuthStatus = AuthStatus.Failed;
+
+                    if (!result.IsConnectionAllowed)
+                    {
+                        _transport?.Close();
+                    }
+
                     return Message.FromReply(message, new { Success = false });
                 }
             }

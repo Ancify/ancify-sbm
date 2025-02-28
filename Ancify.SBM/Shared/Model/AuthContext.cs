@@ -7,10 +7,12 @@ public class AuthContext
     public string? Scope { get; set; }
     public bool Success { get; set; }
     public object? SessionData { get; set; }
+    public bool IsConnectionAllowed { get; set; }
 
     public AuthContext()
     {
         Success = false;
+        IsConnectionAllowed = false;
     }
 
     public AuthContext(string userId, List<string>? roles = null, string? scope = null, object? sessionData = null)
@@ -18,7 +20,8 @@ public class AuthContext
         UserId = userId;
         Roles = roles ?? [];
         Scope = scope;
-        Success = true;
         SessionData = sessionData;
+        Success = true;
+        IsConnectionAllowed = true;
     }
 }

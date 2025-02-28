@@ -9,4 +9,5 @@ public interface ITransport
     IAsyncEnumerable<Message> ReceiveAsync(CancellationToken cancellationToken = default);
     event EventHandler<ConnectionStatusEventArgs>? ConnectionStatusChanged;
     void OnAuthenticated();
+    void Close();
 }
