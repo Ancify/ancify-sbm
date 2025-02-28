@@ -23,6 +23,8 @@ public class ServerSocket(IPAddress host, int port, SslConfig sslConfig, AuthHan
 
     public AuthHandlerType? AuthHandler { get => authHandler; }
 
+    public bool AnonymousDisallowed { get; protected set; }
+
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         _listener.Start();
@@ -38,7 +40,8 @@ public class ServerSocket(IPAddress host, int port, SslConfig sslConfig, AuthHan
 
                 var clientSocket = new ConnectedClientSocket(transport, this)
                 {
-                    ClientId = Guid.NewGuid()
+                    ClientId = Guid.NewGuid(),
+                    DisallowAnonymous = AnonymousDisallowed
                 };
 
                 _clients[clientSocket.ClientId] = clientSocket;
@@ -78,6 +81,11 @@ public class ServerSocket(IPAddress host, int port, SslConfig sslConfig, AuthHan
     public void OnClientDisconnected(ClientDisconnectedEventArgs e)
     {
         ClientDisconnected?.Invoke(this, e);
+    }
+
+    public void DisallowAnonymous()
+    {
+        AnonymousDisallowed = true;
     }
 }
 

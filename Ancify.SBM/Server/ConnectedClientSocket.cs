@@ -11,6 +11,8 @@ public class ConnectedClientSocket : SbmSocket
 
     public AuthContext Context { get; protected set; }
 
+    public bool DisallowAnonymous { get; set; }
+
     public ConnectedClientSocket(ITransport transport, ServerSocket server) : base(transport)
     {
         Context = new();
@@ -57,6 +59,13 @@ public class ConnectedClientSocket : SbmSocket
 
             return Message.FromReply(message, new { Success = true });
         });
+    }
+
+    protected override Task<bool> IsMessageAllowedAsync(Message message)
+    {
+        return DisallowAnonymous && !IsAuthenticated()
+            ? Task.FromResult(false)
+            : base.IsMessageAllowedAsync(message);
     }
 
     protected override async Task HandleMessageAsync(Message message)

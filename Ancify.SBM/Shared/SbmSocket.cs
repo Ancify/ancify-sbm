@@ -103,10 +103,20 @@ public abstract class SbmSocket
         });
     }
 
+    protected virtual Task<bool> IsMessageAllowedAsync(Message message)
+    {
+        return Task.FromResult(true);
+    }
+
     protected virtual async Task HandleMessageAsync(Message message)
     {
         if (_handlers.TryGetValue(message.Channel, out var handlers))
         {
+            if (!await IsMessageAllowedAsync(message))
+            {
+                SbmLogger.Get()?.LogInformation("Rejected message on channel {Channel} from client {SenderId}", message.Channel, message.SenderId);
+            }
+
             // Create a copy of the handlers list to safely iterate over it
             var handlersCopy = handlers.ToList();
 
