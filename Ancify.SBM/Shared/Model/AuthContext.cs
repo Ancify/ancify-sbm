@@ -24,4 +24,6 @@ public class AuthContext
         Success = true;
         IsConnectionAllowed = true;
     }
+
+    public static AuthContext Failed { get => new(); }
 }
