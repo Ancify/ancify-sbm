@@ -25,7 +25,7 @@ sslConfig.SslEnabled = false;
 
 
 // @todo: dissallow by default & handler exceptions (anonymous handlers)
-var serverSocket = new ServerSocket(System.Net.IPAddress.Loopback, 12345, sslConfig, (id, key) => Task.FromResult(new AuthContext("1234", [])));
+var serverSocket = new ServerSocket(System.Net.IPAddress.Loopback, 12345, sslConfig, (id, key, scope) => Task.FromResult(new AuthContext("1234", [])));
 
 serverSocket.ClientConnected += (s, e) =>
 {

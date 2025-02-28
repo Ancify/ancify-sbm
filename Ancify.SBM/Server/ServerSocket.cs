@@ -11,7 +11,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Ancify.SBM.Server;
 
-public class ServerSocket(IPAddress host, int port, SslConfig sslConfig, Func<string, string, Task<AuthContext>>? authHandler = null)
+using AuthHandlerType = Func<string /* Id */, string /* Key */, string /* Scope */, Task<AuthContext>>;
+
+public class ServerSocket(IPAddress host, int port, SslConfig sslConfig, AuthHandlerType? authHandler = null)
 {
     private readonly TcpListener _listener = new(host, port);
     private readonly ConcurrentDictionary<Guid, ConnectedClientSocket> _clients = new();
@@ -19,7 +21,7 @@ public class ServerSocket(IPAddress host, int port, SslConfig sslConfig, Func<st
     public event EventHandler<ClientConnectedEventArgs>? ClientConnected;
     public event EventHandler<ClientDisconnectedEventArgs>? ClientDisconnected;
 
-    public Func<string, string, Task<AuthContext>>? AuthHandler { get => authHandler; }
+    public AuthHandlerType? AuthHandler { get => authHandler; }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {

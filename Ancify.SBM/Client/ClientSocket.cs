@@ -17,9 +17,9 @@ public class ClientSocket : SbmSocket
         await _transport!.ConnectAsync();
 
     }
-    public async Task<bool> AuthenticateAsync(string id, string key)
+    public async Task<bool> AuthenticateAsync(string id, string key, string? scope = null)
     {
-        var message = new Message("_auth_", new { Id = id, Key = key });
+        var message = new Message("_auth_", new { Id = id, Key = key, Scope = scope });
         var response = await SendRequestAsync(message);
 
         var data = response.AsTypeless();

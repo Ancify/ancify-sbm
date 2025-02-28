@@ -29,8 +29,9 @@ public class ConnectedClientSocket : SbmSocket
 
             var id = (string)data["Id"];
             var key = (string)data["Key"];
+            var scope = (string)data["Scope"];
 
-            var handlerTask = _server.AuthHandler?.Invoke(id, key);
+            var handlerTask = _server.AuthHandler?.Invoke(id, key, scope);
 
             if (handlerTask is not null)
             {
@@ -75,9 +76,9 @@ public class ConnectedClientSocket : SbmSocket
         }
     }
 
-    public void AuthenticationGuard(string role)
+    public void AuthenticationGuard(string role, string? scope = null)
     {
-        if (!IsAuthenticated() || !Context.Success || !Context.Roles.Contains(role))
+        if (!IsAuthenticated() || !Context.Success || !Context.Roles.Contains(role) || (scope is not null && scope != Context.Scope))
         {
             throw new UnauthorizedAccessException();
         }
