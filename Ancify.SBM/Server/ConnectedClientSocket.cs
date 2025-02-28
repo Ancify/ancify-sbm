@@ -91,11 +91,21 @@ public class ConnectedClientSocket : SbmSocket
         }
     }
 
-    public void AuthenticationGuard(string role, string? scope = null)
+    public void AuthenticationGuard(string? role = null, string? scope = null)
     {
-        if (!IsAuthenticated() || !Context.Success || !Context.Roles.Contains(role) || (scope is not null && scope != Context.Scope))
+        if (!IsAuthenticated() || !Context.Success)
         {
-            throw new UnauthorizedAccessException();
+            throw new UnauthorizedAccessException("Not authenticated.");
+        }
+
+        if (role is not null && !Context.Roles.Contains(role))
+        {
+            throw new UnauthorizedAccessException("Client does not have required role.");
+        }
+
+        if (scope is not null && scope != Context.Scope)
+        {
+            throw new UnauthorizedAccessException("Client does not have required scope.");
         }
     }
 }
