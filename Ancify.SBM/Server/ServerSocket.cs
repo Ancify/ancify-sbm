@@ -60,31 +60,70 @@ namespace Ancify.SBM.Server
 
         public async Task StartAsync(CancellationToken cancellationToken = default)
         {
-            if (_useWebSocket)
+            try
             {
-                _httpListener!.Start();
-                SbmLogger.Get()?.LogInformation("HTTP Listener started for WebSocket connections.");
-
-                while (!cancellationToken.IsCancellationRequested)
+                if (_useWebSocket)
                 {
-                    HttpListenerContext context;
-                    try
-                    {
-                        context = await _httpListener.GetContextAsync();
-                    }
-                    catch (Exception ex)
-                    {
-                        SbmLogger.Get()?.LogError(ex, "Error accepting HTTP context for WebSocket connection.");
-                        continue;
-                    }
+                    _httpListener!.Start();
+                    SbmLogger.Get()?.LogInformation("HTTP Listener started for WebSocket connections.");
 
-                    if (context.Request.IsWebSocketRequest)
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        HttpListenerContext context;
+                        try
+                        {
+                            context = await _httpListener.GetContextAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            SbmLogger.Get()?.LogError(ex, "Error accepting HTTP context for WebSocket connection.");
+                            continue;
+                        }
+
+                        if (context.Request.IsWebSocketRequest)
+                        {
+                            try
+                            {
+                                // Accept the WebSocket upgrade request.
+                                var wsContext = await context.AcceptWebSocketAsync(subProtocol: null);
+                                var transport = new WebsocketTransport(wsContext.WebSocket);
+                                var clientSocket = new ConnectedClientSocket(transport, this)
+                                {
+                                    ClientId = Guid.NewGuid(),
+                                    DisallowAnonymous = AnonymousDisallowed
+                                };
+
+                                _clients[clientSocket.ClientId] = clientSocket;
+                                ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
+                            }
+                            catch (Exception ex)
+                            {
+                                SbmLogger.Get()?.LogError(ex, "Failed to accept WebSocket connection.");
+                                context.Response.StatusCode = 500;
+                                context.Response.Close();
+                            }
+                        }
+                        else
+                        {
+                            // Reject non-WebSocket requests.
+                            context.Response.StatusCode = 400;
+                            context.Response.Close();
+                        }
+                    }
+                }
+                else
+                {
+                    _tcpListener!.Start();
+                    SbmLogger.Get()?.LogInformation("TCP Listener started.");
+
+                    while (!cancellationToken.IsCancellationRequested)
                     {
                         try
                         {
-                            // Accept the WebSocket upgrade request.
-                            var wsContext = await context.AcceptWebSocketAsync(subProtocol: null);
-                            var transport = new WebsocketTransport(wsContext.WebSocket);
+                            var tcpClient = await _tcpListener.AcceptTcpClientAsync(cancellationToken);
+                            var transport = new TcpTransport(tcpClient, _sslConfig);
+                            await transport.SetupServerStream();
+
                             var clientSocket = new ConnectedClientSocket(transport, this)
                             {
                                 ClientId = Guid.NewGuid(),
@@ -96,46 +135,14 @@ namespace Ancify.SBM.Server
                         }
                         catch (Exception ex)
                         {
-                            SbmLogger.Get()?.LogError(ex, "Failed to accept WebSocket connection.");
-                            context.Response.StatusCode = 500;
-                            context.Response.Close();
+                            SbmLogger.Get()?.LogError(ex, "Unexpected exception on client connection.");
                         }
-                    }
-                    else
-                    {
-                        // Reject non-WebSocket requests.
-                        context.Response.StatusCode = 400;
-                        context.Response.Close();
                     }
                 }
             }
-            else
+            catch (Exception ex)
             {
-                _tcpListener!.Start();
-                SbmLogger.Get()?.LogInformation("TCP Listener started.");
-
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    try
-                    {
-                        var tcpClient = await _tcpListener.AcceptTcpClientAsync(cancellationToken);
-                        var transport = new TcpTransport(tcpClient, _sslConfig);
-                        await transport.SetupServerStream();
-
-                        var clientSocket = new ConnectedClientSocket(transport, this)
-                        {
-                            ClientId = Guid.NewGuid(),
-                            DisallowAnonymous = AnonymousDisallowed
-                        };
-
-                        _clients[clientSocket.ClientId] = clientSocket;
-                        ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
-                    }
-                    catch (Exception ex)
-                    {
-                        SbmLogger.Get()?.LogError(ex, "Unexpected exception on client connection.");
-                    }
-                }
+                SbmLogger.Get()?.LogError(ex, "Unexpected when attempting to start listening.");
             }
         }
 
