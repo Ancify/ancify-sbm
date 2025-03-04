@@ -50,7 +50,8 @@ namespace Ancify.SBM.Server
                 // Set up an HttpListener to accept WebSocket upgrade requests.
                 _httpListener = new HttpListener();
                 // For secure WebSocket connections (wss), you would need to use "https://"
-                _httpListener.Prefixes.Add($"http://{host}:{port}/");
+                var ip = host == IPAddress.Any ? "*" : host.ToString();
+                _httpListener.Prefixes.Add($"http://{ip}:{port}/");
             }
             else
             {
