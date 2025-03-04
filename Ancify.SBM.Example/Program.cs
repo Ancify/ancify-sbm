@@ -5,7 +5,7 @@ using Ancify.SBM.Server;
 using Ancify.SBM.Shared;
 using Ancify.SBM.Shared.Model;
 using Ancify.SBM.Shared.Model.Networking;
-using Ancify.SBM.Shared.Transport.TCP;
+using Ancify.SBM.Shared.Transport.WS;
 
 using Microsoft.Extensions.Logging;
 
@@ -25,7 +25,7 @@ sslConfig.SslEnabled = false;
 
 
 // @todo: dissallow by default & handler exceptions (anonymous handlers)
-var serverSocket = new ServerSocket(System.Net.IPAddress.Loopback, 12345, sslConfig, (id, key, scope) => Task.FromResult(new AuthContext("1234", [])));
+var serverSocket = new ServerSocket(System.Net.IPAddress.Loopback, 12345, sslConfig, useWebSocket: true, (id, key, scope) => Task.FromResult(new AuthContext("1234", [])));
 
 serverSocket.ClientConnected += (s, e) =>
 {
@@ -66,7 +66,8 @@ serverSocket.ClientConnected += (s, e) =>
 
 _ = serverSocket.StartAsync();
 
-var transport = new TcpTransport("127.0.0.1", 12345, sslConfig);
+//var transport = new TcpTransport("127.0.0.1", 12345, sslConfig);
+var transport = new WebsocketTransport("ws://127.0.0.1:12345");
 var clientSocket = new ClientSocket(transport);
 
 clientSocket.On<ConnectionStatusEventArgs>(EventType.ConnectionStatusChanged, args =>
