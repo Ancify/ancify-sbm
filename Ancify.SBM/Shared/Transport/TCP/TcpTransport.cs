@@ -249,7 +249,7 @@ public class TcpTransport : ITransport, IDisposable
         _cts?.Cancel();
         _stream?.Dispose();
         _client?.Close();
-        ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
+        //ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
     }
 
     public void Close()

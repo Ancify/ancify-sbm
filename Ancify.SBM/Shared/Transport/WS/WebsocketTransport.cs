@@ -153,6 +153,6 @@ public class WebsocketTransport : ITransport, IDisposable
         {
             _serverWebSocket?.Dispose();
         }
-        ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
+        //ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
     }
 }
