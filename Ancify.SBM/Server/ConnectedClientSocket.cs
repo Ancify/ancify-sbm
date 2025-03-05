@@ -108,5 +108,38 @@ public class ConnectedClientSocket : SbmSocket
             throw new UnauthorizedAccessException("Client does not have required scope.");
         }
     }
+
+    public void AuthenticationGuardAny(string[]? roles = null, string[]? scopes = null)
+    {
+        if (!IsAuthenticated() || !Context.Success)
+        {
+            throw new UnauthorizedAccessException("Not authenticated.");
+        }
+
+        bool hasValidRole = roles is null || roles.Any(Context.Roles.Contains);
+        bool hasValidScope = scopes is null || scopes.Any(scope => scope == Context.Scope);
+
+        if (!hasValidRole && !hasValidScope)
+        {
+            throw new UnauthorizedAccessException("Client does not have any of the required roles or scopes.");
+        }
+    }
+
+    public void AuthenticationGuardAll(string[]? roles = null, string[]? scopes = null)
+    {
+        if (!IsAuthenticated() || !Context.Success)
+        {
+            throw new UnauthorizedAccessException("Not authenticated.");
+        }
+
+        bool hasAllRoles = roles is null || roles.All(Context.Roles.Contains);
+        bool hasAllScopes = scopes is null || scopes.All(scope => scope == Context.Scope);
+
+        if (!hasAllRoles || !hasAllScopes)
+        {
+            throw new UnauthorizedAccessException("Client does not have all the required roles and scopes.");
+        }
+    }
+
 }
 

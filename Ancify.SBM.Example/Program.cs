@@ -62,6 +62,12 @@ serverSocket.ClientConnected += (s, e) =>
     });
 
     e.ClientSocket.On("test", message => Message.FromReply(message, "reply!"));
+
+    e.ClientSocket.On("heartbeat", message =>
+    {
+        Console.WriteLine("server heatbeat");
+        return Message.FromReply(message, "heartbeat");
+    });
 };
 
 _ = serverSocket.StartAsync();
@@ -103,5 +109,18 @@ var reply = await clientSocket.SendRequestAsync(new Message
 });
 
 Console.WriteLine($"Reply: {reply.Data}");
+
+while (true)
+{
+    await Task.Delay(1 * 1000);
+    try
+    {
+        await clientSocket.SendRequestAsync(new Message("heartbeat"));
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("request failed");
+    }
+}
 
 await Task.Delay(-1);

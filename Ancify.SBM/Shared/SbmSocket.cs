@@ -282,6 +282,14 @@ public abstract class SbmSocket
         return _transport.SendAsync(message);
     }
 
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <param name="request"></param>
+    /// <param name="timeout"></param>
+    /// <returns></returns>
+    /// <exception cref="InvalidOperationException"></exception>
+    /// <exception cref="TimeoutException"></exception>
     public virtual async Task<Message> SendRequestAsync(Message request, TimeSpan? timeout = null)
     {
         timeout ??= TimeSpan.FromSeconds(15);
