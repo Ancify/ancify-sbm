@@ -19,6 +19,9 @@ public class WebsocketTransport : ITransport, IDisposable
     private readonly bool _isServer;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
+    public bool AlwaysReconnect { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+    public int MaxConnectWaitTime { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+
     public event EventHandler<ConnectionStatusEventArgs>? ConnectionStatusChanged;
 
     // Client constructor – connection will be initiated later via ConnectAsync.
@@ -154,5 +157,15 @@ public class WebsocketTransport : ITransport, IDisposable
             _serverWebSocket?.Dispose();
         }
         //ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
+    }
+
+    public Task ConnectAsync(int maxRetries = 5, int delayMilliseconds = 1000, bool isReconnect = false)
+    {
+        throw new NotImplementedException();
+    }
+
+    public Task Reconnect()
+    {
+        throw new NotImplementedException();
     }
 }

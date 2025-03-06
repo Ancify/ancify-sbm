@@ -23,7 +23,7 @@ public class SslConfig
 
 public class TcpTransport : ITransport, IDisposable
 {
-    private readonly TcpClient _client;
+    private TcpClient _client;
     private Stream _stream;
     private readonly CancellationTokenSource _cts;
     private readonly string _host;
@@ -33,6 +33,11 @@ public class TcpTransport : ITransport, IDisposable
     private bool _isSettingUpSsl = false;
     private readonly SslConfig _sslConfig;
     private readonly SemaphoreSlim _streamWriteLock = new(1, 1);
+
+    public TcpClient Client { get => _client; }
+
+    public bool AlwaysReconnect { get; set; }
+    public int MaxConnectWaitTime { get; set; } = 60 * 1000;
 
     // Server constructor – accepts an already connected TcpClient
     public TcpTransport(TcpClient client, SslConfig sslConfig)
@@ -44,6 +49,7 @@ public class TcpTransport : ITransport, IDisposable
         _isServer = true;
         _sslConfig = sslConfig;
         _stream = client.GetStream();
+        SetupTcpSocket();
     }
 
     // Client constructor – connection will be initiated later in ConnectAsync
@@ -56,6 +62,27 @@ public class TcpTransport : ITransport, IDisposable
         _stream = null!;
         _isServer = false;
         _sslConfig = sslConfig;
+        SetupTcpSocket();
+    }
+
+    private void SetupTcpSocket()
+    {
+        // These are actually only for blocking calls and thus completely useless ._.
+
+        if (_client is not null)
+        {
+            _client.SendTimeout = 0;
+            _client.ReceiveTimeout = 0;
+
+            _client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+        }
+
+
+        if (_stream is not null)
+        {
+            _stream.WriteTimeout = Timeout.Infinite;
+            _stream.ReadTimeout = Timeout.Infinite;
+        }
     }
 
     public async Task SetupServerStream()
@@ -85,13 +112,22 @@ public class TcpTransport : ITransport, IDisposable
             _stream = _client.GetStream();
         }
 
+        SetupTcpSocket();
+
         ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Connected));
     }
 
-    public async Task ConnectAsync(int maxRetries = 5, int delayMilliseconds = 1000)
+    public async Task ConnectAsync(int maxRetries = 5, int delayMilliseconds = 1000, bool isReconnect = false)
     {
+        if (isReconnect)
+        {
+            _client.Dispose();
+            _client = new TcpClient();
+            _stream = null!;
+            SetupTcpSocket();
+        }
         int attempt = 0;
-        ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Connecting));
+        ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(isReconnect ? ConnectionStatus.Reconnecting : ConnectionStatus.Connecting));
 
         while (attempt < maxRetries)
         {
@@ -107,7 +143,7 @@ public class TcpTransport : ITransport, IDisposable
                     var sslStream = new SslStream(networkStream, false, (sender, certificate, chain, sslPolicyErrors) =>
                     {
                         // If RejectUnauthorized is false, accept any certificate.
-                        return !_sslConfig.RejectUnauthorized ? true : sslPolicyErrors == SslPolicyErrors.None;
+                        return !_sslConfig.RejectUnauthorized || sslPolicyErrors == SslPolicyErrors.None;
                     });
                     _stream = sslStream;
                     // Perform the client-side handshake.
@@ -124,7 +160,7 @@ public class TcpTransport : ITransport, IDisposable
                     _stream = networkStream;
                 }
 
-                ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Connected));
+                ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(isReconnect ? ConnectionStatus.Reconnected : ConnectionStatus.Connected));
                 return;
             }
             catch (SocketException ex)
@@ -140,6 +176,7 @@ public class TcpTransport : ITransport, IDisposable
 
                 // Wait before retrying (exponential backoff)
                 int waitTime = delayMilliseconds * (int)Math.Pow(2, attempt - 1);
+                waitTime = Math.Clamp(waitTime, 0, MaxConnectWaitTime);
                 await Task.Delay(waitTime);
 
                 if (_cts.Token.IsCancellationRequested)
@@ -170,8 +207,15 @@ public class TcpTransport : ITransport, IDisposable
         await _streamWriteLock.WaitAsync();
         try
         {
-            await _stream.WriteAsync(lengthPrefix);
-            await _stream.WriteAsync(data);
+            if (_stream is not null)
+            {
+                await _stream.WriteAsync(lengthPrefix);
+                await _stream.WriteAsync(data);
+            }
+            else
+            {
+                throw new InvalidOperationException("Connection not open");
+            }
         }
         finally
         {
@@ -187,6 +231,15 @@ public class TcpTransport : ITransport, IDisposable
                original.MessageId == deserialized.MessageId &&
                original.SenderId == deserialized.SenderId &&
                original.TargetId == deserialized.TargetId;
+    }
+
+    public async Task Reconnect()
+    {
+        await ConnectAsync(
+            maxRetries: int.MaxValue,
+            delayMilliseconds: 100,
+            isReconnect: true
+        );
     }
 
     public virtual async IAsyncEnumerable<Message> ReceiveAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -217,8 +270,18 @@ public class TcpTransport : ITransport, IDisposable
             {
                 SbmLogger.Get()?.LogError(ex, "Failed to read stream.");
 
-                if (_stream is not null && !_client.Client.Connected)
-                    break;
+                if (_stream is not null && _client.Client?.Connected != true)
+                {
+                    if (!AlwaysReconnect || _isServer)
+                    {
+                        break;
+                    }
+                    else
+                    {
+
+                        await Reconnect();
+                    }
+                }
 
                 continue;
             }

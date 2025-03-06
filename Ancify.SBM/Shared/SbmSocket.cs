@@ -33,6 +33,10 @@ public abstract class SbmSocket
         _transport.ConnectionStatusChanged += (s, e) => OnConnectionStatusChanged(e);
     }
 
+    public ITransport GetTransport()
+    {
+        return _transport;
+    }
     public AuthStatus AuthStatus { get; protected set; }
 
     public Guid ClientId { get; init; }

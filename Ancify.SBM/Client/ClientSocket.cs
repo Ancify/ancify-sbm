@@ -9,6 +9,12 @@ public class ClientSocket : SbmSocket
     public ClientSocket(ITransport transport) : base(transport)
     {
         StartReceiving();
+        SetupHandlers();
+    }
+
+    private void SetupHandlers()
+    {
+        On("__$status", message => Message.FromReply(message, new { Success = true }));
     }
 
 

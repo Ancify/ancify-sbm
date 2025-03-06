@@ -28,6 +28,8 @@ namespace Ancify.SBM.Server
 
         public AuthHandlerType? AuthHandler => _authHandler;
 
+        public int ClientCount { get => _clients.Count; }
+
         public bool AnonymousDisallowed { get; protected set; }
 
         /// <summary>
@@ -50,7 +52,7 @@ namespace Ancify.SBM.Server
                 // Set up an HttpListener to accept WebSocket upgrade requests.
                 _httpListener = new HttpListener();
                 // For secure WebSocket connections (wss), you would need to use "https://"
-                var ip = host == IPAddress.Any ? "*" : host.ToString();
+                var ip = host == IPAddress.Any ? "+" : host.ToString();
                 _httpListener.Prefixes.Add($"http://{ip}:{port}/");
             }
             else
@@ -61,6 +63,8 @@ namespace Ancify.SBM.Server
 
         public async Task StartAsync(CancellationToken cancellationToken = default)
         {
+            CheckConnectionStatus();
+
             try
             {
                 if (_useWebSocket)
@@ -144,6 +148,30 @@ namespace Ancify.SBM.Server
             catch (Exception ex)
             {
                 SbmLogger.Get()?.LogError(ex, "Unexpected when attempting to start listening.");
+            }
+        }
+
+        public async void CheckConnectionStatus()
+        {
+            while (true)
+            {
+                try
+                {
+                    foreach (var (id, client) in _clients)
+                    {
+                        try
+                        {
+                            await client.CheckConnectionStatus();
+                        }
+                        catch { }
+                    }
+                }
+                catch
+                {
+
+                }
+
+                await Task.Delay(5 * 1000);
             }
         }
 

@@ -13,6 +13,9 @@ public class ConnectedClientSocket : SbmSocket
 
     public bool DisallowAnonymous { get; set; }
 
+    private int _faults = 0;
+    private readonly int _maxFaults = 3;
+
     public ConnectedClientSocket(ITransport transport, ServerSocket server) : base(transport)
     {
         Context = new();
@@ -141,5 +144,23 @@ public class ConnectedClientSocket : SbmSocket
         }
     }
 
+    internal async Task CheckConnectionStatus()
+    {
+        try
+        {
+            await SendRequestAsync(new Message("__$status"));
+            _faults = 0;
+        }
+        catch
+        {
+            // This will close the connection, no need to retry from the server
+            _faults++;
+
+            if (_faults >= _maxFaults)
+            {
+                OnConnectionStatusChanged(new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
+            }
+        }
+    }
 }
 
