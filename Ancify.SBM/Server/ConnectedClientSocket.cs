@@ -66,7 +66,7 @@ public class ConnectedClientSocket : SbmSocket
 
     protected override Task<bool> IsMessageAllowedAsync(Message message)
     {
-        return DisallowAnonymous && !IsAuthenticated()
+        return DisallowAnonymous && !IsAuthenticated() && message.Channel != "_auth_"
             ? Task.FromResult(false)
             : base.IsMessageAllowedAsync(message);
     }

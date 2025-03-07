@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 
 Console.WriteLine("Hello, World!");
 
-var port = 80; // 12345;
+var port = 12345;
 
 int counter = 0;
 
@@ -67,7 +67,11 @@ serverSocket.ClientConnected += (s, e) =>
         return null;
     });
 
-    e.ClientSocket.On("test", message => Message.FromReply(message, "reply!"));
+    e.ClientSocket.On("test", async message =>
+    {
+        await Task.Delay(1000);
+        return Message.FromReply(message, "reply!");
+    });
 
     e.ClientSocket.On("heartbeat", message =>
     {
