@@ -42,7 +42,7 @@ public class WebsocketTransport : ITransport, IDisposable
         _clientWebSocket = null!;
     }
 
-    public async Task ConnectAsync(int maxRetries = 5, int delayMilliseconds = 1000)
+    public async Task ConnectAsync(int maxRetries = 5, int delayMilliseconds = 1000, bool isReconnect = false)
     {
         if (_isServer)
         {
@@ -157,11 +157,6 @@ public class WebsocketTransport : ITransport, IDisposable
             _serverWebSocket?.Dispose();
         }
         //ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
-    }
-
-    public Task ConnectAsync(int maxRetries = 5, int delayMilliseconds = 1000, bool isReconnect = false)
-    {
-        throw new NotImplementedException();
     }
 
     public Task Reconnect()
