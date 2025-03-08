@@ -20,12 +20,25 @@ public enum EventType
     ClientIdReceived
 }
 
+public class Handler
+{
+    public required Func<Message, Task<Message?>> HandlerFunc { get; set; }
+    public bool IsRespondingHandler { get; set; }
+}
+
+public class SbmSocketConfig
+{
+    public Func<Message, Exception, Message?>? ErrorHandler { get; set; }
+}
+
 public abstract class SbmSocket
 {
     protected ITransport _transport;
-    protected readonly Dictionary<string, List<Func<Message, Task<Message?>>>> _handlers = [];
+    protected readonly Dictionary<string, List<Handler>> _handlers = [];
     protected readonly Dictionary<EventType, List<Func<object?, Task>>> _eventHandlers = [];
     protected readonly CancellationTokenSource _cts = new();
+
+    public SbmSocketConfig Config { get; set; } = new();
 
     public SbmSocket(ITransport transport)
     {
@@ -128,7 +141,7 @@ public abstract class SbmSocket
             {
                 try
                 {
-                    var responseTask = handler?.Invoke(message);
+                    var responseTask = handler.HandlerFunc?.Invoke(message);
 
                     if (responseTask is null)
                         continue;
@@ -148,6 +161,21 @@ public abstract class SbmSocket
                 catch (Exception ex)
                 {
                     SbmLogger.Get()?.LogError(ex, "Failed to handle message.");
+
+                    if (handler.IsRespondingHandler && Config.ErrorHandler is not null)
+                    {
+                        var response = Config.ErrorHandler(message, ex);
+
+                        if (response != null)
+                        {
+                            response.ReplyTo = message.MessageId;
+                            response.TargetId = message.SenderId;
+                            response.SenderId = ClientId;
+
+                            if (_transport != null)
+                                await _transport.SendAsync(response);
+                        }
+                    }
                 }
             }
         }
@@ -159,18 +187,20 @@ public abstract class SbmSocket
     /// <param name="channel">The message channel to listen on.</param>
     /// <param name="handler">An asynchronous function that processes the message and optionally returns a response message.</param>
     /// <returns>An action that unregisters the handler when called.</returns>
-    public Action On(string channel, Func<Message, Task<Message?>> handler)
+    public Action On(string channel, Func<Message, Task<Message?>> handler, bool isResponseFunc = true)
     {
         if (!_handlers.TryGetValue(channel, out var handlers))
         {
             _handlers[channel] = [];
             handlers = _handlers[channel];
         }
-        handlers.Add(handler);
+        var newHandler = new Handler() { HandlerFunc = handler, IsRespondingHandler = isResponseFunc };
+
+        handlers.Add(newHandler);
 
         return () =>
         {
-            handlers.Remove(handler);
+            handlers.Remove(newHandler);
             if (handlers.Count == 0)
             {
                 _handlers.Remove(channel);
@@ -190,7 +220,7 @@ public abstract class SbmSocket
         {
             await handler(message);
             return null;
-        });
+        }, isResponseFunc: false);
     }
 
     /// <summary>
@@ -205,7 +235,7 @@ public abstract class SbmSocket
         {
             var response = handler(message);
             return Task.FromResult<Message?>(response);
-        });
+        }, isResponseFunc: true);
     }
 
     /// <summary>
@@ -220,7 +250,7 @@ public abstract class SbmSocket
         {
             handler(message);
             return Task.FromResult<Message?>(null);
-        });
+        }, isResponseFunc: false);
     }
 
     public Action On(EventType eventType, Func<object?, Task> handler)

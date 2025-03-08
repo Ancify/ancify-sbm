@@ -1,5 +1,6 @@
 ﻿// See https://aka.ms/new-console-template for more information
 using System.Net;
+using System.Text.Json;
 
 using Ancify.SBM.Client;
 using Ancify.SBM.Example;
@@ -33,6 +34,12 @@ sslConfig.SslEnabled = false;
 // @todo: dissallow by default & handler exceptions (anonymous handlers)
 var serverSocket = new ServerSocket(IPAddress.Any, port, sslConfig, useWebSocket: false, (id, key, scope) => Task.FromResult(new AuthContext("1234", [])));
 
+serverSocket.ServerConfig.ErrorHandler = (message, exception) => Message.FromReply(message, new
+{
+    Success = false,
+    exception.Message
+});
+
 serverSocket.ClientConnected += (s, e) =>
 {
     Console.WriteLine($"Client connected: {e.ClientSocket.ClientId}");
@@ -65,6 +72,12 @@ serverSocket.ClientConnected += (s, e) =>
         */
 
         return null;
+    });
+
+    e.ClientSocket.On("exception_test", message =>
+    {
+        throw new Exception();
+        return Message.FromReply(message, null);
     });
 
     e.ClientSocket.On("test", async message =>
@@ -131,6 +144,13 @@ var reply = await clientSocket.SendRequestAsync(new Message
 });
 
 Console.WriteLine($"Reply: {reply.Data}");
+
+var faultyReply = await clientSocket.SendRequestAsync(new Message
+{
+    Channel = "exception_test"
+});
+
+Console.WriteLine($"Faulty reply: {JsonSerializer.Serialize(faultyReply.Data)}");
 
 while (true)
 {
