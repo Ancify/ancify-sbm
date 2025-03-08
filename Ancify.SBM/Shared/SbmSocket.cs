@@ -106,7 +106,7 @@ public abstract class SbmSocket
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"An exception occured while handling the message: {ex.Message}");
+                        //Console.WriteLine($"An exception occured while handling the message: {ex.Message}");
                         SbmLogger.Get()?.LogError(ex, "An exception occured while handling the message.");
                     }
                 }

@@ -4,6 +4,7 @@ using System.Text.Json;
 
 using Ancify.SBM.Client;
 using Ancify.SBM.Example;
+using Ancify.SBM.Generated;
 using Ancify.SBM.Server;
 using Ancify.SBM.Shared;
 using Ancify.SBM.Shared.Model;
@@ -93,6 +94,15 @@ serverSocket.ClientConnected += (s, e) =>
         return Message.FromReply(message, $"heartbeat {counter}");
     });
 
+    e.ClientSocket.On("dto", message =>
+    {
+        //Console.WriteLine(message.AsTypeless().FromDictionary());
+        //var result = Generated.TestDtoConverter.FromMessage(message);
+        var result = message.ToTestDto();
+        var result2 = message.ToTestDto2();
+        Console.WriteLine(result.Name);
+    });
+
     e.ClientSocket.On<ConnectionStatusEventArgs>(EventType.ConnectionStatusChanged, args =>
     {
         if (args.Status == ConnectionStatus.Disconnected)
@@ -150,6 +160,8 @@ var faultyReply = await clientSocket.SendRequestAsync(new Message
     Channel = "exception_test"
 });
 
+await clientSocket.SendAsync(new Message("dto", new { Name = "Red" }));
+
 Console.WriteLine($"Faulty reply: {JsonSerializer.Serialize(faultyReply.Data)}");
 
 while (true)
@@ -166,3 +178,9 @@ while (true)
 }
 
 await Task.Delay(-1);
+
+[Ancify.SBM.SbmDto]
+public record TestDto(string Name);
+
+[Ancify.SBM.SbmDto]
+public class TestDto2 { public string Name { get; set; } }

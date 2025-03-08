@@ -13,6 +13,10 @@
   </ItemGroup>
 
   <ItemGroup>
+      <ProjectReference Include="..\Ancify.SBM.SourceGen\Ancify.SBM.SourceGen.csproj">
+          <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+          <OutputItemType>Analyzer</OutputItemType>
+      </ProjectReference>
     <ProjectReference Include="..\Ancify.SBM\Ancify.SBM.csproj" />
   </ItemGroup>
 

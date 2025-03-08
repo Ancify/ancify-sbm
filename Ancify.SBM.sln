@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ancify.SBM", "Ancify.SBM\An
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ancify.SBM.Example", "Ancify.SBM.Example\Ancify.SBM.Example.csproj", "{925031A1-EF2F-4BE4-B196-94BA0D44998B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ancify.SBM.SourceGen", "Ancify.SBM.SourceGen\Ancify.SBM.SourceGen.csproj", "{BD8FAAB3-DA39-45F1-B04E-F4D7A9732C4C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{925031A1-EF2F-4BE4-B196-94BA0D44998B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{925031A1-EF2F-4BE4-B196-94BA0D44998B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{925031A1-EF2F-4BE4-B196-94BA0D44998B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BD8FAAB3-DA39-45F1-B04E-F4D7A9732C4C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BD8FAAB3-DA39-45F1-B04E-F4D7A9732C4C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BD8FAAB3-DA39-45F1-B04E-F4D7A9732C4C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BD8FAAB3-DA39-45F1-B04E-F4D7A9732C4C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
