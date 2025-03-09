@@ -98,9 +98,8 @@ serverSocket.ClientConnected += (s, e) =>
     {
         //Console.WriteLine(message.AsTypeless().FromDictionary());
         //var result = Generated.TestDtoConverter.FromMessage(message);
-        var result = message.ToTestDto();
         var result2 = message.ToTestDto2();
-        Console.WriteLine(result.Name);
+        Console.WriteLine(result2.Name);
     });
 
     e.ClientSocket.On<ConnectionStatusEventArgs>(EventType.ConnectionStatusChanged, args =>
@@ -160,7 +159,7 @@ var faultyReply = await clientSocket.SendRequestAsync(new Message
     Channel = "exception_test"
 });
 
-await clientSocket.SendAsync(new Message("dto", new { Name = "Red" }));
+await clientSocket.SendAsync(new Message("dto", new { name = "Red", values = new { a = "3", b = "4" }, ints = new List<int>() { 1, 2, 3 } }));
 
 Console.WriteLine($"Faulty reply: {JsonSerializer.Serialize(faultyReply.Data)}");
 
@@ -182,5 +181,10 @@ await Task.Delay(-1);
 [SbmDto]
 public record TestDto(string Name);
 
-[SbmDto]
-public class TestDto2 { public required string Name { get; set; } }
+[SbmDto(ignoreCasing: true)]
+public class TestDto2
+{
+    public required string Name { get; set; }
+    public required Dictionary<string, string> Values { get; set; }
+    public required List<int> Ints { get; set; }
+}
