@@ -11,29 +11,36 @@ public class DtoConverterSourceGenerator : IIncrementalGenerator
 {
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
+        // 1. Emit the attribute source at compile-time 
+        //    so your user code can do: [SbmDto(ignoreCasing: true)]
         context.RegisterPostInitializationOutput(ctx =>
         {
             ctx.AddSource("SbmDtoConverterAttribute.g.cs", SourceText.From(AttributeSourceCode, Encoding.UTF8));
         });
 
+        // 2. Gather all class/record declarations that have at least one attribute list
+        //    then filter down to those with [SbmDto(...)] on them.
         IncrementalValuesProvider<INamedTypeSymbol> dtoTypes = context.SyntaxProvider
             .CreateSyntaxProvider(
-                // Support both class and record declarations
                 predicate: static (node, _) =>
                 {
+                    // We are interested in class or record declarations that have attributes
                     return (node is ClassDeclarationSyntax cds && cds.AttributeLists.Count > 0)
-                           || (node is RecordDeclarationSyntax rds && rds.AttributeLists.Count > 0);
+                        || (node is RecordDeclarationSyntax rds && rds.AttributeLists.Count > 0);
                 },
                 transform: static (syntaxContext, _) =>
                 {
+                    // Turn the syntax node into a symbol 
                     if (syntaxContext.Node is ClassDeclarationSyntax cds)
                         return syntaxContext.SemanticModel.GetDeclaredSymbol(cds) as INamedTypeSymbol;
                     if (syntaxContext.Node is RecordDeclarationSyntax rds)
                         return syntaxContext.SemanticModel.GetDeclaredSymbol(rds) as INamedTypeSymbol;
                     return null;
-                })
+                }
+            )
             .Where(static symbol => symbol is not null && HasDtoConverterAttribute(symbol!))!;
 
+        // 3. For each discovered symbol, generate the converter code
         context.RegisterSourceOutput(dtoTypes, (spc, dtoSymbol) =>
         {
             var source = GenerateConverterCode(dtoSymbol);
@@ -41,17 +48,46 @@ public class DtoConverterSourceGenerator : IIncrementalGenerator
         });
     }
 
+    /// <summary>
+    /// Minimal check that the type has [SbmDtoAttribute].
+    /// </summary>
     private static bool HasDtoConverterAttribute(INamedTypeSymbol symbol) =>
         symbol.GetAttributes().Any(ad => ad.AttributeClass?.ToDisplayString() == "Ancify.SBM.Generated.SbmDtoAttribute");
 
+    /// <summary>
+    /// Read the 'ignoreCasing' flag from the SbmDtoAttribute, defaulting to false if not found.
+    /// </summary>
+    private static bool GetIgnoreCasing(INamedTypeSymbol symbol)
+    {
+        // Grab the [SbmDto(...)] attribute
+        var attr = symbol.GetAttributes().FirstOrDefault(ad =>
+            ad.AttributeClass?.ToDisplayString() == "Ancify.SBM.Generated.SbmDtoAttribute");
+
+        if (attr == null)
+            return false;
+
+        // Our attribute constructor has a single bool parameter: SbmDtoAttribute(bool ignoreCasing = false).
+        // So we can read it from attr.ConstructorArguments if present
+        foreach (var ca in attr.ConstructorArguments)
+        {
+            if (ca.Kind == TypedConstantKind.Primitive && ca.Value is bool bVal)
+                return bVal;
+        }
+
+        return false;
+    }
+
     private static string GenerateConverterCode(INamedTypeSymbol dtoSymbol)
     {
-        var namespaceName = dtoSymbol.ContainingNamespace.IsGlobalNamespace
-            ? "Ancify.SBM.Generated"
-            : dtoSymbol.ContainingNamespace.ToDisplayString();
-        var className = dtoSymbol.Name;
+        // Determine which namespace to place the generated converter in
+        var namespaceName = dtoSymbol.ContainingNamespace is { IsGlobalNamespace: false }
+            ? dtoSymbol.ContainingNamespace.ToDisplayString()
+            : "Ancify.SBM.Generated";
 
-        var builder = new StringBuilder($@"
+        var className = dtoSymbol.Name;
+        var ignoreCasing = GetIgnoreCasing(dtoSymbol);
+
+        var sb = new StringBuilder($@"
 using System;
 using System.Collections.Generic;
 using Ancify.SBM.Shared.Model.Networking;
@@ -65,16 +101,18 @@ namespace {namespaceName}
             if (message == null)
                 throw new ArgumentNullException(nameof(message));
 
-            var data = message.AsTypeless() ?? throw new ArgumentException(""Message data is null"", nameof(message));
+            // Expecting message.AsTypeless() to return IReadOnlyDictionary<object, object>
+            var data = message.AsTypeless() 
+                ?? throw new ArgumentException(""Message data is null"", nameof(message));
 ");
 
-        // Check if this is a record without a parameterless constructor:
-        bool isRecordWithoutParameterlessCtor = dtoSymbol.IsRecord
+        // Detect if this is a record with no parameterless constructor => use constructor-based approach
+        bool isRecordWithoutParamlessCtor = dtoSymbol.IsRecord
             && !dtoSymbol.InstanceConstructors.Any(c => c.Parameters.Length == 0);
 
-        if (isRecordWithoutParameterlessCtor)
+        if (isRecordWithoutParamlessCtor)
         {
-            // Use the constructor-based approach (e.g. positional record).
+            // For a positional record, find its primary/public constructor
             var primaryCtor = dtoSymbol.InstanceConstructors
                 .Where(c => c.DeclaredAccessibility == Accessibility.Public)
                 .OrderByDescending(c => c.Parameters.Length)
@@ -82,143 +120,169 @@ namespace {namespaceName}
 
             if (primaryCtor == null)
             {
-                builder.AppendLine($@"            throw new InvalidOperationException(""No accessible constructor found for {className}."");");
+                sb.AppendLine($@"            throw new InvalidOperationException(""No accessible constructor found for {className}."");");
             }
             else
             {
                 var parameters = primaryCtor.Parameters;
-                var arguments = new List<string>();
 
-                foreach (var param in parameters)
+                var argList = new List<string>();
+                foreach (var p in parameters)
                 {
-                    var paramName = param.Name;
-                    var paramType = param.Type.ToDisplayString();
+                    var paramName = p.Name;
+                    var paramType = p.Type.ToDisplayString();
 
-                    // We'll require all constructor parameters to be present:
-                    builder.AppendLine($@"
-            if (!data.TryGetValue(""{paramName}"", out var {paramName}Value))
-                throw new KeyNotFoundException(""Property '{paramName}' not found in message data."");");
+                    sb.AppendLine($@"
+            if (!TryGetValueIgnoreCase(data, ""{paramName}"", {(ignoreCasing ? "true" : "false")}, out var {paramName}Value))
+                throw new KeyNotFoundException(""Property '{paramName}' not found in message data."");
 
-                    arguments.Add($@"({paramType})Convert.ChangeType({paramName}Value, typeof({paramType}))");
+            // Convert to the correct type
+            var {paramName}Typed = ({paramType})Convert.ChangeType({paramName}Value, typeof({paramType}));
+");
+                    argList.Add(paramName + "Typed");
                 }
 
-                builder.AppendLine($@"
-            var dto = new {className}({string.Join(", ", arguments)});
+                sb.AppendLine($@"
+            var dto = new {className}({string.Join(", ", argList)});
 ");
             }
         }
         else
         {
-            // Class or record with a parameterless constructor -> object-initializer approach.
-            // Build up lines for each property inside the initializer.
-            var properties = dtoSymbol
-                .GetMembers()
+            // For a class or a record with a parameterless constructor, use an object-initializer
+            // so that we properly set required properties and avoid the C# 11 "required" error.
+
+            // Build up property assignments.
+            var settableProps = dtoSymbol.GetMembers()
                 .OfType<IPropertySymbol>()
-                .Where(p => p.SetMethod != null) // must be settable
+                .Where(p => p.SetMethod is not null)
                 .ToArray();
 
-            // Step 1: For each property, we may need an earlier line to handle "throw if missing"
-            // or a data.TryGetValue(...) call for the object-initializer assignment.
-            //
-            // Step 2: We'll store property assignments in a list, then join them into
-            // the object initializer.
-            //
-            // We'll do:
-            //   var dto = new MyClass {
-            //       Foo = (FooType)Convert.ChangeType(FooValue, typeof(FooType)),
-            //       Bar = data.TryGetValue("Bar", out var barValue) ? ... : ...
-            //   };
-
-            var preChecks = new List<string>();
-            var assignments = new List<string>();
-
-            foreach (var prop in properties)
-            {
-                string propName = prop.Name;
-                string propType = prop.Type.ToDisplayString();
-
-                bool isRequired = prop.IsRequired; // C# 11's IsRequired
-                bool isNullable = prop.NullableAnnotation == NullableAnnotation.Annotated
-                                  // For value types, we should check .IsNullableType
-                                  || (prop.Type.IsValueType && prop.Type.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T);
-
-                if (isRequired)
-                {
-                    // Required => we must throw if missing
-                    preChecks.Add($@"
-            if (!data.TryGetValue(""{propName}"", out var {propName}Value))
-                throw new KeyNotFoundException(""Required property '{propName}' not found in message data."");");
-
-                    // Then we can do: {propName} = (PropType) Convert.ChangeType({propName}Value, typeof(PropType))
-                    assignments.Add($@"{propName} = ({propType})Convert.ChangeType({propName}Value, typeof({propType}))");
-                }
-                else
-                {
-                    // Not required:
-                    // Decide how to handle non-nullable vs nullable
-                    if (!isNullable)
-                    {
-                        // Non-nullable property that is not 'required'.
-                        // Typically you either (1) throw if missing, or 
-                        // (2) default to 'default(...)' if you want it optional.
-                        // Let's assume we do throw if missing for non-nullable (though you can revise).
-                        preChecks.Add($@"
-            if (!data.TryGetValue(""{propName}"", out var {propName}Value))
-                throw new KeyNotFoundException(""Non-nullable property '{propName}' not found in message data."");");
-
-                        assignments.Add($@"{propName} = ({propType})Convert.ChangeType({propName}Value, typeof({propType}))");
-                    }
-                    else
-                    {
-                        // Nullable property => if missing, treat it as null / default
-                        assignments.Add($@"{propName} = data.TryGetValue(""{propName}"", out var {propName}Value) 
-                ? ({propType})Convert.ChangeType({propName}Value, typeof({propType})) 
-                : default");
-                    }
-                }
-            }
-
-            // Emit any required pre-check lines:
-            foreach (var line in preChecks)
-            {
-                builder.AppendLine(line);
-            }
-
-            // Now build up the object initializer:
-            builder.AppendLine($@"
+            // Begin object creation
+            sb.AppendLine($@"
             var dto = new {className}
             {{");
 
-            for (int i = 0; i < assignments.Count; i++)
+            var assignments = new List<string>();
+
+            foreach (var prop in settableProps)
             {
-                string suffix = (i == assignments.Count - 1) ? string.Empty : ",";
-                builder.AppendLine($"                {assignments[i]}{suffix}");
+                string propName = prop.Name;
+                string propType = prop.Type.ToDisplayString();
+                bool isRequired = prop.IsRequired;
+                bool isNullable = prop.NullableAnnotation == NullableAnnotation.Annotated
+                    || (prop.Type.IsValueType && prop.Type.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T);
+
+                if (isRequired)
+                {
+                    // For required properties, throw if missing
+                    assignments.Add($@"
+                {propName} = 
+                    TryGetValueIgnoreCase(data, ""{propName}"", {(ignoreCasing ? "true" : "false")}, out var {propName}Value)
+                        ? ({propType})Convert.ChangeType({propName}Value, typeof({propType}))
+                        : throw new KeyNotFoundException(""Required property '{propName}' not found in message data."")");
+                }
+                else
+                {
+                    if (!isNullable)
+                    {
+                        // Non-nullable but not required => throw if missing (change this logic as desired)
+                        assignments.Add($@"
+                {propName} = 
+                    TryGetValueIgnoreCase(data, ""{propName}"", {(ignoreCasing ? "true" : "false")}, out var {propName}Value)
+                        ? ({propType})Convert.ChangeType({propName}Value, typeof({propType}))
+                        : throw new KeyNotFoundException(""Non-nullable property '{propName}' not found in message data."")");
+                    }
+                    else
+                    {
+                        // Nullable => if missing, default to null/zero 
+                        assignments.Add($@"
+                {propName} = 
+                    TryGetValueIgnoreCase(data, ""{propName}"", {(ignoreCasing ? "true" : "false")}, out var {propName}Value)
+                        ? ({propType})Convert.ChangeType({propName}Value, typeof({propType}))
+                        : default");
+                    }
+                }
             }
 
-            builder.AppendLine($@"            }};
+            sb.AppendLine(string.Join(",", assignments));
+            sb.AppendLine($@"
+            }};
 ");
         }
 
-        // Return statement
-        builder.AppendLine($@"
+        // Return dto
+        sb.AppendLine($@"
             return dto;
         }}
 
         public static {className} To{className}(this Message message) => FromMessage(message);
-    }}
-}}");
 
-        return builder.ToString();
+        /// <summary>
+        /// A helper used by the generated code to do case-sensitive or optional case-insensitive lookups.
+        /// Also tries the 'camelCase' variant of the property if ignoreCasing is true.
+        /// </summary>
+        private static bool TryGetValueIgnoreCase(
+            IReadOnlyDictionary<object, object> data, 
+            string propName, 
+            bool ignoreCasing,
+            out object value)
+        {{
+            // 1) Exact match using the property name (as string)
+            if (data.TryGetValue(propName, out value))
+                return true;
+
+            if (ignoreCasing)
+            {{
+                // 2) Try 'camelCase' => e.g. 'DeploymentId' -> 'deploymentId'
+                string camel = ToCamelCase(propName);
+                if (data.TryGetValue(camel, out value))
+                    return true;
+            }}
+
+            value = null;
+            return false;
+        }}
+
+        private static string ToCamelCase(string pascal)
+        {{
+            if (string.IsNullOrEmpty(pascal))
+                return pascal;
+
+            if (pascal.Length == 1)
+                return pascal.ToLowerInvariant();
+
+            if (char.IsLower(pascal[0])) 
+                return pascal;
+
+            return char.ToLowerInvariant(pascal[0]) + pascal.Substring(1);
+        }}
+    }}
+}}
+");
+
+        return sb.ToString();
     }
 
+    /// <summary>
+    /// This is the entire source code for the attribute, including the new bool 'IgnoreCasing' property.
+    /// It is added via RegisterPostInitializationOutput so that user code sees [SbmDto(ignoreCasing: ...)].
+    /// </summary>
     private const string AttributeSourceCode = @"
 using System;
 
 namespace Ancify.SBM.Generated
 {
     [AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = false)]
-    public sealed class SbmDtoAttribute : Attribute 
-    { 
+    public sealed class SbmDtoAttribute : Attribute
+    {
+        public bool IgnoreCasing { get; }
+
+        public SbmDtoAttribute(bool ignoreCasing = false)
+        {
+            IgnoreCasing = ignoreCasing;
+        }
     }
-}";
+}
+";
 }
