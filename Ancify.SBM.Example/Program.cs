@@ -179,8 +179,8 @@ while (true)
 
 await Task.Delay(-1);
 
-[Ancify.SBM.SbmDto]
+[SbmDto]
 public record TestDto(string Name);
 
-[Ancify.SBM.SbmDto]
-public class TestDto2 { public string Name { get; set; } }
+[SbmDto]
+public class TestDto2 { public required string Name { get; set; } }
