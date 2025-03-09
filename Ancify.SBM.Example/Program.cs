@@ -159,7 +159,7 @@ var faultyReply = await clientSocket.SendRequestAsync(new Message
     Channel = "exception_test"
 });
 
-await clientSocket.SendAsync(new Message("dto", new { name = "Red", values = new { a = "3", b = "4" }, ints = new List<int>() { 1, 2, 3 } }));
+await clientSocket.SendAsync(new Message("dto", new { name = "Red", values = new { a = "3", b = "4" }, ints = new List<int>() { 1, 2, 3 }, TT = new { a = "a" } }));
 
 Console.WriteLine($"Faulty reply: {JsonSerializer.Serialize(faultyReply.Data)}");
 
@@ -178,8 +178,11 @@ while (true)
 
 await Task.Delay(-1);
 
-[SbmDto]
+[SbmDto(ignoreCasing: true)]
 public record TestDto(string Name);
+
+[SbmDto(ignoreCasing: true)]
+public class TT { public string A { get; set; } }
 
 [SbmDto(ignoreCasing: true)]
 public class TestDto2
@@ -187,4 +190,5 @@ public class TestDto2
     public required string Name { get; set; }
     public required Dictionary<string, string> Values { get; set; }
     public required List<int> Ints { get; set; }
+    public TT? TT { get; set; }
 }
