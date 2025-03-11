@@ -193,9 +193,3 @@ public class TestDto2
     public required List<int> Ints { get; set; }
     public TT? TT { get; set; }
 }
-
-[SbmDto]
-public class Response<T>
-{
-    public required List<T> Items { get; set; }
-}
