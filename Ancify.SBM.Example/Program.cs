@@ -159,6 +159,7 @@ var faultyReply = await clientSocket.SendRequestAsync(new Message
     Channel = "exception_test"
 });
 
+//await clientSocket.SendAsync(new Message("dto", new { name = "Red", values = new { a = "3", b = "4" }, ints = new List<int>() { 1, 2, 3 }, TT = new { a = "a" } }));
 await clientSocket.SendAsync(new Message("dto", new { name = "Red", values = new { a = "3", b = "4" }, ints = new List<int>() { 1, 2, 3 }, TT = new { a = "a" } }));
 
 Console.WriteLine($"Faulty reply: {JsonSerializer.Serialize(faultyReply.Data)}");
@@ -191,4 +192,10 @@ public class TestDto2
     public required Dictionary<string, string> Values { get; set; }
     public required List<int> Ints { get; set; }
     public TT? TT { get; set; }
+}
+
+[SbmDto]
+public class Response<T>
+{
+    public required List<T> Items { get; set; }
 }
