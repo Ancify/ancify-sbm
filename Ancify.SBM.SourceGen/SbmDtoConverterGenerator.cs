@@ -345,6 +345,9 @@ namespace {ns}
                     : null;
             }}
 
+            if (targetType == typeof(System.Guid) && rawValue.GetType() == typeof(string))
+                return Guid.Parse((string)rawValue);
+
             // 2) if targetType is object or string => trivial
             if (targetType == typeof(object)) return rawValue;
             if (targetType == typeof(string)) return rawValue.ToString();
