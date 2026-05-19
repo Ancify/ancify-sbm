@@ -77,12 +77,13 @@ public class ErrorPathTests
         });
 
         var client = TestUtil.CreateClient(port);
-        // ConnectAsync returns once the TCP handshake is done; SBM has no application-
-        // layer handshake, so connect succeeds even though the peer is about to close.
-        await client.ConnectAsync();
-
+        // Subscribe BEFORE connect so the peer-side close (which can fire
+        // Disconnected before ConnectAsync's await resumes on a fast loopback)
+        // is observed. Registering after the await is racy.
         var statuses = new System.Collections.Concurrent.ConcurrentQueue<ConnectionStatus>();
         client.On<ConnectionStatusEventArgs>(EventType.ConnectionStatusChanged, args => statuses.Enqueue(args.Status));
+
+        await client.ConnectAsync();
 
         try { await client.SendAsync(new Message("ping")); }
         catch { /* peer may have closed before the send write completes */ }
