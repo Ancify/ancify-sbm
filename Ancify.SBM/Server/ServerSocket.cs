@@ -65,7 +65,7 @@ public class ServerSocket
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
-        CheckConnectionStatus();
+        _ = Task.Run(() => CheckConnectionStatusLoop(cancellationToken), cancellationToken);
 
         try
         {
@@ -176,27 +176,42 @@ public class ServerSocket
         }
     }
 
-    public async void CheckConnectionStatus()
+    private async Task CheckConnectionStatusLoop(CancellationToken cancellationToken)
     {
-        while (true)
+        while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                foreach (var (id, client) in _clients)
+                var snapshot = _clients.Values.ToArray();
+                if (snapshot.Length > 0)
                 {
-                    try
+                    var parallelOptions = new ParallelOptions
                     {
-                        await client.CheckConnectionStatus();
-                    }
-                    catch { }
+                        CancellationToken = cancellationToken,
+                        MaxDegreeOfParallelism = Math.Min(8, snapshot.Length)
+                    };
+
+                    await Parallel.ForEachAsync(snapshot, parallelOptions, async (client, ct) =>
+                    {
+                        try { await client.CheckConnectionStatus(); }
+                        catch (Exception ex)
+                        {
+                            SbmLogger.Get()?.LogDebug(ex, "CheckConnectionStatus failed for client {ClientId}.", client.ClientId);
+                        }
+                    });
                 }
             }
-            catch
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
             {
-
+                SbmLogger.Get()?.LogError(ex, "Unexpected error in connection status loop.");
             }
 
-            await Task.Delay(5 * 1000);
+            try
+            {
+                await Task.Delay(5 * 1000, cancellationToken);
+            }
+            catch (OperationCanceledException) { break; }
         }
     }
 
