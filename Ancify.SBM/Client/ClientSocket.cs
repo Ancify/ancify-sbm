@@ -23,6 +23,15 @@ public class ClientSocket : SbmSocket
         await _transport!.ConnectAsync();
 
     }
+
+    /// <summary>
+    /// Sends an _auth_ frame and updates AuthStatus based on the server's reply.
+    /// </summary>
+    /// <remarks>
+    /// Reconnect at the transport level re-establishes the socket only. SBM does not
+    /// retain credentials. Applications using AlwaysReconnect=true must subscribe to
+    /// ConnectionStatusChanged → Reconnected and call AuthenticateAsync again.
+    /// </remarks>
     public async Task<bool> AuthenticateAsync(string id, string key, string? scope = null)
     {
         AuthStatus = AuthStatus.Authenticating;

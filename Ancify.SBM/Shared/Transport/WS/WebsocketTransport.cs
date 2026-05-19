@@ -192,12 +192,18 @@ public class WebsocketTransport : ITransport, IDisposable
         //ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
     }
 
+    /// <summary>
+    /// Stub: full WebSocket reconnect is not yet implemented. Returns a completed task
+    /// instead of throwing so generic ITransport consumers don't crash.
+    /// </summary>
+    /// <remarks>
+    /// When implemented, the same caller contract as TcpTransport.Reconnect applies:
+    /// reconnect at the transport level re-establishes the socket only. SBM does not
+    /// retain credentials. Applications using AlwaysReconnect=true must subscribe to
+    /// ConnectionStatusChanged → Reconnected and call AuthenticateAsync again.
+    /// </remarks>
     public Task Reconnect()
     {
-        // Full WebSocket reconnect (replace _clientWebSocket and re-handshake) is a
-        // deferred feature. Returning a completed task instead of throwing keeps the
-        // ITransport contract usable from generic consumers that may invoke Reconnect
-        // (e.g. via AlwaysReconnect = true) without crashing them.
         SbmLogger.Get()?.LogWarning("WebsocketTransport.Reconnect is a no-op; full reconnect support is not yet implemented.");
         return Task.CompletedTask;
     }

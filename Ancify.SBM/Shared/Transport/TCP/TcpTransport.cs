@@ -241,6 +241,14 @@ public class TcpTransport : ITransport, IDisposable
         }
     }
 
+    /// <summary>
+    /// Re-establishes the TCP connection with exponential backoff and unbounded retries.
+    /// </summary>
+    /// <remarks>
+    /// Reconnect at the transport level re-establishes the socket only. SBM does not
+    /// retain credentials. Applications using AlwaysReconnect=true must subscribe to
+    /// ConnectionStatusChanged → Reconnected and call AuthenticateAsync again.
+    /// </remarks>
     public async Task Reconnect()
     {
         await ConnectAsync(
