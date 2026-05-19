@@ -220,6 +220,10 @@ public class TcpTransport : ITransport, IDisposable
     public async Task SendAsync(Message message)
     {
         byte[] data = MessagePackSerializer.Serialize(message);
+
+        if (data.Length > MaxFrameSize)
+            throw new InvalidOperationException($"Frame of {data.Length} bytes exceeds MaxFrameSize ({MaxFrameSize}).");
+
         var lengthPrefix = BitConverter.GetBytes(data.Length);
 
         await _streamWriteLock.WaitAsync();
