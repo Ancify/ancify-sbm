@@ -174,6 +174,30 @@ public class ServerSocket
         {
             SbmLogger.Get()?.LogError(ex, "Unexpected when attempting to start listening.");
         }
+        finally
+        {
+            // Cancellation only stops the accept loop body. The OS listener stays
+            // bound until we explicitly stop/dispose it, which means callers can't
+            // restart a server on the same port until the process exits. Release
+            // the listener as part of shutdown.
+            try { _tcpListener?.Stop(); } catch { }
+            try { _httpListener?.Close(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Stops the server's listener and disconnects all currently-connected clients.
+    /// Safe to call multiple times.
+    /// </summary>
+    public void Stop()
+    {
+        try { _tcpListener?.Stop(); } catch { }
+        try { _httpListener?.Close(); } catch { }
+
+        foreach (var client in _clients.Values.ToArray())
+        {
+            try { client.Dispose(); } catch { }
+        }
     }
 
     private async Task CheckConnectionStatusLoop(CancellationToken cancellationToken)

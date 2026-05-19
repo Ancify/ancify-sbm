@@ -312,24 +312,15 @@ public class TcpTransport : ITransport, IDisposable
         catch (Exception ex)
         {
             SbmLogger.Get()?.LogError(ex, "Failed to read frame length prefix.");
-
-            if (_client?.Client?.Connected != true)
-            {
-                if (!AlwaysReconnect || _isServer)
-                    return null;
-
-                try { await Reconnect(); }
-                catch (Exception rex) { SbmLogger.Get()?.LogError(rex, "Reconnect failed."); return null; }
-                return Array.Empty<byte>();
-            }
-
-            return null;
+            return await HandleReadLossAsync();
         }
 
         if (lengthRead == 0)
         {
-            // Clean EOF before any bytes — peer closed.
-            return null;
+            // Clean EOF before any bytes — peer closed. Treat as a connection loss so
+            // AlwaysReconnect clients try to reconnect rather than silently exiting.
+            SbmLogger.Get()?.LogInformation("Peer closed connection.");
+            return await HandleReadLossAsync();
         }
 
         if (lengthRead < 4)
@@ -396,6 +387,34 @@ public class TcpTransport : ITransport, IDisposable
         }
 
         return data;
+    }
+
+    /// <summary>
+    /// Common path when a read fails or observes EOF. Server-side connections and
+    /// client connections without AlwaysReconnect terminate; client connections
+    /// with AlwaysReconnect signal Disconnected (so SbmSocket can fail in-flight
+    /// requests) and attempt to reconnect.
+    /// </summary>
+    private async Task<byte[]?> HandleReadLossAsync()
+    {
+        if (_isServer || !AlwaysReconnect)
+            return null;
+
+        // Surface the loss so SbmSocket fails pending requests. The follow-up Reconnect
+        // call will subsequently fire Reconnecting → Reconnected via ConnectAsync.
+        ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
+
+        // Tear down the old client socket; ConnectAsync(isReconnect:true) will rebuild it.
+        try { _stream?.Dispose(); } catch { }
+        _stream = null!;
+
+        try { await Reconnect(); }
+        catch (Exception rex)
+        {
+            SbmLogger.Get()?.LogError(rex, "Reconnect failed.");
+            return null;
+        }
+        return Array.Empty<byte>();
     }
 
     private static async Task<int> ReadExactlyAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken cancellationToken)
