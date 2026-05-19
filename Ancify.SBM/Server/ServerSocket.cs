@@ -126,26 +126,47 @@ public class ServerSocket
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
+                    TcpClient tcpClient;
                     try
                     {
-                        var tcpClient = await _tcpListener.AcceptTcpClientAsync(cancellationToken);
-                        var transport = new TcpTransport(tcpClient, _sslConfig);
-                        await transport.SetupServerStream();
-
-                        var clientSocket = new ConnectedClientSocket(transport, this)
-                        {
-                            ClientId = Guid.NewGuid(),
-                            DisallowAnonymous = AnonymousDisallowed,
-                            Config = ServerConfig
-                        };
-
-                        _clients[clientSocket.ClientId] = clientSocket;
-                        ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
+                        tcpClient = await _tcpListener.AcceptTcpClientAsync(cancellationToken);
                     }
+                    catch (OperationCanceledException) { break; }
                     catch (Exception ex)
                     {
-                        SbmLogger.Get()?.LogError(ex, "Unexpected exception on client connection.");
+                        SbmLogger.Get()?.LogError(ex, "Unexpected exception accepting TCP client.");
+                        continue;
                     }
+
+                    // Move the (potentially slow) SSL handshake off the accept loop so that
+                    // a stuck or malicious client cannot block other connections from being
+                    // accepted. Failures during handshake must close the underlying socket
+                    // to avoid leaking the TcpClient.
+                    _ = Task.Run(async () =>
+                    {
+                        TcpTransport? transport = null;
+                        try
+                        {
+                            transport = new TcpTransport(tcpClient, _sslConfig);
+                            await transport.SetupServerStream();
+
+                            var clientSocket = new ConnectedClientSocket(transport, this)
+                            {
+                                ClientId = Guid.NewGuid(),
+                                DisallowAnonymous = AnonymousDisallowed,
+                                Config = ServerConfig
+                            };
+
+                            _clients[clientSocket.ClientId] = clientSocket;
+                            ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
+                        }
+                        catch (Exception ex)
+                        {
+                            SbmLogger.Get()?.LogError(ex, "Failed to set up incoming client; closing connection.");
+                            try { transport?.Close(); } catch { }
+                            try { tcpClient.Close(); } catch { }
+                        }
+                    }, cancellationToken);
                 }
             }
         }
