@@ -33,6 +33,7 @@ public class TcpTransport : ITransport, IDisposable
     private bool _isSettingUpSsl = false;
     private readonly SslConfig _sslConfig;
     private readonly SemaphoreSlim _streamWriteLock = new(1, 1);
+    private int _disposed = 0;
 
     public TcpClient Client { get => _client; }
 
@@ -231,16 +232,6 @@ public class TcpTransport : ITransport, IDisposable
         }
     }
 
-    private static bool AreMessagesEqual(Message original, Message deserialized)
-    {
-        return original.Channel == deserialized.Channel &&
-               Equals(original.Data, deserialized.Data) &&
-               original.ReplyTo == deserialized.ReplyTo &&
-               original.MessageId == deserialized.MessageId &&
-               original.SenderId == deserialized.SenderId &&
-               original.TargetId == deserialized.TargetId;
-    }
-
     public async Task Reconnect()
     {
         await ConnectAsync(
@@ -390,11 +381,13 @@ public class TcpTransport : ITransport, IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         GC.SuppressFinalize(this);
-        _cts?.Cancel();
-        _stream?.Dispose();
-        _client?.Close();
-        //ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
+        try { _cts?.Cancel(); } catch { }
+        try { _stream?.Dispose(); } catch { }
+        try { _client?.Close(); } catch { }
     }
 
     public void Close()
