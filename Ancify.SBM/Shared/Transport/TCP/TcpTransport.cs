@@ -48,6 +48,14 @@ public class TcpTransport : ITransport, IDisposable
     /// </summary>
     public int MaxFrameSize { get; set; } = 16 * 1024 * 1024;
 
+    /// <summary>
+    /// Per-frame read timeout. Once at least one byte of a frame has begun
+    /// arriving, the rest of the length prefix + payload must arrive within
+    /// this window or the connection is torn down. TimeSpan.Zero disables
+    /// the timeout entirely.
+    /// </summary>
+    public TimeSpan ReadTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
     // Server constructor – accepts an already connected TcpClient
     public TcpTransport(TcpClient client, SslConfig sslConfig)
     {
@@ -347,15 +355,38 @@ public class TcpTransport : ITransport, IDisposable
 
         byte[] data = new byte[length];
         int payloadRead;
+        CancellationTokenSource? timeoutCts = null;
+        CancellationTokenSource? linkedCts = null;
         try
         {
-            payloadRead = await ReadExactlyAsync(stream, data, 0, length, cancellationToken);
+            CancellationToken readToken = cancellationToken;
+            if (ReadTimeout > TimeSpan.Zero)
+            {
+                timeoutCts = new CancellationTokenSource(ReadTimeout);
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+                readToken = linkedCts.Token;
+            }
+
+            try
+            {
+                payloadRead = await ReadExactlyAsync(stream, data, 0, length, readToken);
+            }
+            catch (OperationCanceledException) when (timeoutCts is not null && timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                SbmLogger.Get()?.LogWarning("Frame payload read timed out after {Timeout} ({Length} bytes).", ReadTimeout, length);
+                return null;
+            }
+            catch (OperationCanceledException) { return null; }
+            catch (Exception ex)
+            {
+                SbmLogger.Get()?.LogError(ex, "Failed to read frame payload ({Length} bytes).", length);
+                return null;
+            }
         }
-        catch (OperationCanceledException) { return null; }
-        catch (Exception ex)
+        finally
         {
-            SbmLogger.Get()?.LogError(ex, "Failed to read frame payload ({Length} bytes).", length);
-            return null;
+            linkedCts?.Dispose();
+            timeoutCts?.Dispose();
         }
 
         if (payloadRead < length)

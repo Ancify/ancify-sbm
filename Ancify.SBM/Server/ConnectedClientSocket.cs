@@ -173,15 +173,17 @@ public class ConnectedClientSocket : SbmSocket
     {
         try
         {
-            await SendRequestAsync(new Message("__$status"));
-            _faults = 0;
+            // Short timeout: heartbeats should respond promptly. The previous 15s default
+            // meant three consecutive missed heartbeats could take 45+ seconds to detect.
+            await SendRequestAsync(new Message("__$status"), TimeSpan.FromSeconds(2));
+            Interlocked.Exchange(ref _faults, 0);
         }
         catch
         {
             // This will close the connection, no need to retry from the server
-            _faults++;
+            int current = Interlocked.Increment(ref _faults);
 
-            if (_faults >= _maxFaults)
+            if (current >= _maxFaults)
             {
                 OnConnectionStatusChanged(new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
             }

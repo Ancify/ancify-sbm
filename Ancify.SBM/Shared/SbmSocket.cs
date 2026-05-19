@@ -40,6 +40,14 @@ public class SbmSocketConfig
     /// to 16 MiB.
     /// </summary>
     public int MaxFrameSize { get; set; } = 16 * 1024 * 1024;
+
+    /// <summary>
+    /// Per-frame inbound read timeout. If no byte of a length prefix or payload
+    /// is observed within this window, the receive loop tears the connection
+    /// down rather than waiting for OS TCP keepalive (which is minutes-to-hours
+    /// on Windows by default). Defaults to 60s.
+    /// </summary>
+    public TimeSpan ReadTimeout { get; set; } = TimeSpan.FromSeconds(60);
 }
 
 /// <summary>
