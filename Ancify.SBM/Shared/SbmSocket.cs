@@ -106,7 +106,6 @@ public abstract class SbmSocket
                     }
                     catch (Exception ex)
                     {
-                        //Console.WriteLine($"An exception occured while handling the message: {ex.Message}");
                         SbmLogger.Get()?.LogError(ex, "An exception occured while handling the message.");
                     }
                 }
@@ -132,6 +131,7 @@ public abstract class SbmSocket
             if (!await IsMessageAllowedAsync(message))
             {
                 SbmLogger.Get()?.LogInformation("Rejected message on channel {Channel} from client {SenderId}", message.Channel, message.SenderId);
+                return;
             }
 
             // Create a copy of the handlers list to safely iterate over it
