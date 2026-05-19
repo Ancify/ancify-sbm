@@ -19,8 +19,12 @@ public class WebsocketTransport : ITransport, IDisposable
     private readonly bool _isServer;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
-    public bool AlwaysReconnect { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
-    public int MaxConnectWaitTime { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+    // Mirror the TcpTransport surface so consumers that hold an ITransport reference
+    // don't need to special-case WebSocket. Setting AlwaysReconnect to true currently
+    // has no effect — automatic reconnection on the WS path is a deferred feature —
+    // but the setter no longer throws.
+    public bool AlwaysReconnect { get; set; }
+    public int MaxConnectWaitTime { get; set; } = 60 * 1000;
 
     public event EventHandler<ConnectionStatusEventArgs>? ConnectionStatusChanged;
 
@@ -56,28 +60,43 @@ public class WebsocketTransport : ITransport, IDisposable
 
         while (attempt < maxRetries)
         {
+            Exception? lastError = null;
+
             try
             {
                 await _clientWebSocket.ConnectAsync(_uri!, _cts.Token);
                 if (_clientWebSocket.State == WebSocketState.Open)
                 {
-                    ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Connected));
+                    ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(isReconnect ? ConnectionStatus.Reconnected : ConnectionStatus.Connected));
                     return;
                 }
+
+                // ConnectAsync returned without throwing but the socket is not Open.
+                // Without an explicit retry+delay here the loop would spin tight.
+                lastError = new InvalidOperationException($"WebSocket state after connect was {_clientWebSocket.State}, expected Open.");
             }
             catch (Exception ex)
             {
-                attempt++;
-                SbmLogger.Get()?.LogError(ex, "Attempt {attempt} failed", attempt);
+                lastError = ex;
+            }
 
-                if (attempt >= maxRetries)
-                {
-                    ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Failed));
-                    throw new InvalidOperationException($"Failed to connect to {_uri} after {maxRetries} attempts.", ex);
-                }
+            attempt++;
+            SbmLogger.Get()?.LogError(lastError, "WebSocket connect attempt {Attempt} failed", attempt);
 
-                int waitTime = delayMilliseconds * (int)Math.Pow(2, attempt - 1);
-                await Task.Delay(waitTime, _cts.Token);
+            if (attempt >= maxRetries)
+            {
+                ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Failed));
+                throw new InvalidOperationException($"Failed to connect to {_uri} after {maxRetries} attempts.", lastError);
+            }
+
+            int waitTime = delayMilliseconds * (int)Math.Pow(2, attempt - 1);
+            if (MaxConnectWaitTime > 0)
+                waitTime = Math.Clamp(waitTime, 0, MaxConnectWaitTime);
+            try { await Task.Delay(waitTime, _cts.Token); }
+            catch (OperationCanceledException)
+            {
+                ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Cancelled));
+                throw;
             }
         }
     }
@@ -89,8 +108,22 @@ public class WebsocketTransport : ITransport, IDisposable
         try
         {
             WebSocket socket = _isServer ? _serverWebSocket! : _clientWebSocket;
-            await socket.SendAsync(new ArraySegment<byte>(data),
-                WebSocketMessageType.Binary, endOfMessage: true, _cts.Token);
+            try
+            {
+                await socket.SendAsync(new ArraySegment<byte>(data),
+                    WebSocketMessageType.Binary, endOfMessage: true, _cts.Token);
+            }
+            catch (Exception ex)
+            {
+                // Transport had no way of noticing send failures — downstream callers
+                // therefore believed the connection was still healthy. Surface a
+                // Disconnected event so SbmSocket can fail in-flight requests and
+                // notify event listeners; rethrow so the immediate caller sees the
+                // original exception.
+                SbmLogger.Get()?.LogError(ex, "WebSocket send failed; signalling Disconnected.");
+                ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
+                throw;
+            }
         }
         finally
         {
@@ -161,6 +194,11 @@ public class WebsocketTransport : ITransport, IDisposable
 
     public Task Reconnect()
     {
-        throw new NotImplementedException();
+        // Full WebSocket reconnect (replace _clientWebSocket and re-handshake) is a
+        // deferred feature. Returning a completed task instead of throwing keeps the
+        // ITransport contract usable from generic consumers that may invoke Reconnect
+        // (e.g. via AlwaysReconnect = true) without crashing them.
+        SbmLogger.Get()?.LogWarning("WebsocketTransport.Reconnect is a no-op; full reconnect support is not yet implemented.");
+        return Task.CompletedTask;
     }
 }
