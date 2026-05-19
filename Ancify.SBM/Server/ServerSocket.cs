@@ -200,6 +200,14 @@ public class ServerSocket
         }
     }
 
+    /// <summary>
+    /// Backwards-compatibility shim: in previous versions this method launched the
+    /// per-client heartbeat loop. StartAsync now starts it automatically, so this
+    /// method is a no-op preserved only so external callers continue to compile.
+    /// </summary>
+    [Obsolete("ServerSocket starts the heartbeat loop automatically in StartAsync; this method is a no-op and will be removed in a future version.")]
+    public void CheckConnectionStatus() { /* no-op */ }
+
     private async Task CheckConnectionStatusLoop(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)

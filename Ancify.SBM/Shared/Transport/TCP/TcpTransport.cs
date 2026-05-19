@@ -46,6 +46,7 @@ public class TcpTransport : ITransport, IDisposable
     /// the receive loop to terminate without allocating the payload buffer.
     /// Defaults to 16 MiB; callers can lower or raise this before connecting.
     /// </summary>
+    // TODO(config): MaxFrameSize is currently transport-static; wire through SbmSocketConfig.
     public int MaxFrameSize { get; set; } = 16 * 1024 * 1024;
 
     /// <summary>
