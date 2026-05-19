@@ -64,4 +64,44 @@ internal static class TestUtil
         }
         Assert.Fail(message ?? "Predicate did not become true within the timeout.");
     }
+
+    /// <summary>
+    /// Bundles a ServerSocket + cancellation token so tests can dispose both via using.
+    /// </summary>
+    public sealed class RunningServer : IDisposable
+    {
+        public ServerSocket Server { get; }
+        public int Port { get; }
+        private readonly CancellationTokenSource _cts = new();
+        private bool _disposed;
+
+        public RunningServer(int port, ServerSocket server)
+        {
+            Port = port;
+            Server = server;
+            _ = Server.StartAsync(_cts.Token);
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            try { _cts.Cancel(); } catch { }
+            try { Server.Stop(); } catch { }
+            _cts.Dispose();
+        }
+    }
+
+    public static async Task<RunningServer> StartServerAsync(
+        int port,
+        Func<string, string, string, Task<AuthContext>>? authHandler = null,
+        bool disallowAnonymous = false,
+        Action<ServerSocket>? configure = null)
+    {
+        var server = CreateServer(port, authHandler, disallowAnonymous);
+        configure?.Invoke(server);
+        var running = new RunningServer(port, server);
+        await Task.Delay(50); // small wait so the listener is accepting before the test races to connect
+        return running;
+    }
 }
