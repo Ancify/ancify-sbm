@@ -6,18 +6,70 @@ namespace Ancify.SBM.Client;
 
 public class ClientSocket : SbmSocket
 {
-    public ClientSocket(ITransport transport)
+    public ClientSocket(ITransport transport) : base(transport)
     {
-        _transport = transport;
-        _transport.ConnectionStatusChanged += (s, e) => OnConnectionStatusChanged(e);
         StartReceiving();
+        SetupHandlers();
     }
+
+    private void SetupHandlers()
+    {
+        On("__$status", message => Message.FromReply(message, new { Success = true }));
+    }
+
 
     public async Task ConnectAsync()
     {
-        OnConnectionStatusChanged(new ConnectionStatusEventArgs(ConnectionStatus.Connecting));
         await _transport!.ConnectAsync();
-        OnConnectionStatusChanged(new ConnectionStatusEventArgs(ConnectionStatus.Connected));
+
+    }
+
+    /// <summary>
+    /// Sends an _auth_ frame and updates AuthStatus based on the server's reply.
+    /// </summary>
+    /// <remarks>
+    /// Reconnect at the transport level re-establishes the socket only. SBM does not
+    /// retain credentials. Applications using AlwaysReconnect=true must subscribe to
+    /// ConnectionStatusChanged → Reconnected and call AuthenticateAsync again.
+    /// </remarks>
+    public async Task<bool> AuthenticateAsync(string id, string key, string? scope = null)
+    {
+        AuthStatus = AuthStatus.Authenticating;
+
+        var message = new Message("_auth_", new { Id = id, Key = key, Scope = scope });
+        Message response;
+        try
+        {
+            response = await SendRequestAsync(message);
+        }
+        catch
+        {
+            AuthStatus = AuthStatus.Failed;
+            throw;
+        }
+
+        bool success = false;
+        try
+        {
+            var data = response.AsTypeless();
+            if (data.TryGetValue("Success", out var raw) && raw is bool b)
+                success = b;
+        }
+        catch
+        {
+            // Malformed auth reply: treat as failure rather than throwing
+            // InvalidCastException out of a method whose contract is bool.
+            success = false;
+        }
+
+        AuthStatus = success ? AuthStatus.Authenticated : AuthStatus.Failed;
+
+        if (success)
+        {
+            _transport?.OnAuthenticated();
+        }
+
+        return success;
     }
 
     public override Task SendAsync(Message message)
