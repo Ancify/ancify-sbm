@@ -3,6 +3,8 @@ using Ancify.SBM.Shared;
 using Ancify.SBM.Shared.Model;
 using Ancify.SBM.Shared.Model.Networking;
 
+using Microsoft.Extensions.Logging;
+
 namespace Ancify.SBM.Server;
 
 public class ConnectedClientSocket : SbmSocket
@@ -31,13 +33,22 @@ public class ConnectedClientSocket : SbmSocket
         {
             AuthStatus = AuthStatus.Authenticating;
 
-            var data = message.AsTypeless();
+            string? id = null, key = null, scope = null;
+            try
+            {
+                var data = message.AsTypeless();
+                id = TryGetString(data, "Id");
+                key = TryGetString(data, "Key");
+                scope = TryGetString(data, "Scope");
+            }
+            catch (Exception ex)
+            {
+                SbmLogger.Get()?.LogWarning(ex, "Malformed auth payload from client {ClientId}.", ClientId);
+                AuthStatus = AuthStatus.Failed;
+                return Message.FromReply(message, new { Success = false });
+            }
 
-            var id = (string)data["Id"];
-            var key = (string)data["Key"];
-            var scope = (string)data["Scope"];
-
-            var handlerTask = _server.AuthHandler?.Invoke(id, key, scope);
+            var handlerTask = _server.AuthHandler?.Invoke(id ?? string.Empty, key ?? string.Empty, scope ?? string.Empty);
 
             if (handlerTask is not null)
             {
@@ -63,6 +74,13 @@ public class ConnectedClientSocket : SbmSocket
 
             return Message.FromReply(message, new { Success = true });
         });
+    }
+
+    private static string? TryGetString(IReadOnlyDictionary<object, object> data, string key)
+    {
+        if (!data.TryGetValue(key, out var raw) || raw is null)
+            return null;
+        return raw as string ?? raw.ToString();
     }
 
     protected override Task<bool> IsMessageAllowedAsync(Message message)
