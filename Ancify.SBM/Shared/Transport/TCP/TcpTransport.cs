@@ -34,6 +34,7 @@ public class TcpTransport : ITransport, IDisposable
     private readonly SslConfig _sslConfig;
     private readonly SemaphoreSlim _streamWriteLock = new(1, 1);
     private int _disposed = 0;
+    private int _reconnecting = 0;
 
     public TcpClient Client { get => _client; }
 
@@ -255,11 +256,26 @@ public class TcpTransport : ITransport, IDisposable
     /// </remarks>
     public async Task Reconnect()
     {
-        await ConnectAsync(
-            maxRetries: int.MaxValue,
-            delayMilliseconds: 100,
-            isReconnect: true
-        );
+        // Coalesce concurrent callers (e.g. external Reconnect() racing the receive
+        // loop's HandleReadLossAsync) so we don't Dispose+rebuild _client twice.
+        // The second caller observes the in-flight reconnect and returns immediately;
+        // when the first caller's ConnectAsync sets a new stream, that's the one
+        // both paths will then use.
+        if (Interlocked.CompareExchange(ref _reconnecting, 1, 0) != 0)
+            return;
+
+        try
+        {
+            await ConnectAsync(
+                maxRetries: int.MaxValue,
+                delayMilliseconds: 100,
+                isReconnect: true
+            );
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _reconnecting, 0);
+        }
     }
 
     public virtual async IAsyncEnumerable<Message> ReceiveAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)

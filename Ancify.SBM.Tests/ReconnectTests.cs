@@ -65,4 +65,32 @@ public class ReconnectTests
         secondServerCts.Cancel();
         secondServer.Stop();
     }
+
+    [TestMethod]
+    public async Task ConcurrentReconnect_Coalesces_SingleNewConnection()
+    {
+        int port = TestUtil.GetFreePort();
+        using var server = await TestUtil.StartServerAsync(port);
+
+        int totalAccepts = 0;
+        server.Server.ClientConnected += (_, _) => Interlocked.Increment(ref totalAccepts);
+
+        var transport = TestUtil.CreateClientTransport(port);
+        var client = new Ancify.SBM.Client.ClientSocket(transport);
+        await client.ConnectAsync();
+        await TestUtil.WaitForAsync(() => Volatile.Read(ref totalAccepts) == 1);
+
+        // Fire two concurrent Reconnect()s. With the coalescing guard one should
+        // win and the other should observe _reconnecting=1 and return immediately,
+        // so the server sees only one additional accept (totalAccepts == 2).
+        var r1 = transport.Reconnect();
+        var r2 = transport.Reconnect();
+        await Task.WhenAll(r1, r2);
+
+        await Task.Delay(200);
+        Assert.AreEqual(2, Volatile.Read(ref totalAccepts),
+            "Concurrent Reconnect() must coalesce to a single new accept on the server.");
+
+        client.Dispose();
+    }
 }
