@@ -18,7 +18,6 @@ public class ConcurrencyStressTests
         var clients = new ClientSocket[N];
         for (int i = 0; i < N; i++) clients[i] = TestUtil.CreateClient(port);
 
-        // Parallel connect + auth.
         await Task.WhenAll(clients.Select(async c =>
         {
             await c.ConnectAsync();
@@ -106,7 +105,6 @@ public class ConcurrencyStressTests
         for (int i = 100; i < 120; i++) await client.SendAsync(new Message("v", i));
         await TestUtil.WaitForAsync(() => secondReceived.Count == 20, TimeSpan.FromSeconds(5));
 
-        // Pre-reconnect and post-reconnect message sets must be disjoint and complete.
         Assert.AreEqual(20, firstReceived.Count);
         Assert.AreEqual(20, secondReceived.Count);
         CollectionAssert.AreEquivalent(Enumerable.Range(0, 20).ToArray(), firstReceived.OrderBy(x => x).ToArray());

@@ -93,8 +93,8 @@ public class AuthScenarioTests
 
         var client = TestUtil.CreateClient(port);
         await client.ConnectAsync();
-        // No AuthenticateAsync call. Wait for the server-side handler to be wired
-        // (ClientConnected fires from the per-client Task.Run, not inline on accept).
+        // ClientConnected runs in a Task.Run (C9 fix), so the handler may not be wired
+        // synchronously when SendAsync would otherwise race ahead.
         await TestUtil.WaitForAsync(() => server.Server.ClientCount == 1);
         await Task.Delay(50);
         await client.SendAsync(new Message("anon"));
@@ -115,11 +115,10 @@ public class AuthScenarioTests
         var client = TestUtil.CreateClient(port);
         await client.ConnectAsync();
 
-        // _auth_ channel is whitelisted even pre-auth.
+        // _auth_ is the one channel that DisallowAnonymous lets through pre-auth.
         var ok = await client.AuthenticateAsync("alice", "k");
         Assert.IsTrue(ok);
 
-        // Sanity: after auth, "other" is reachable.
         await client.SendAsync(new Message("other"));
         await TestUtil.WaitForAsync(() => Volatile.Read(ref otherHits) == 1);
 

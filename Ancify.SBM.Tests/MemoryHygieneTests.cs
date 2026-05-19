@@ -136,10 +136,8 @@ public class MemoryHygieneTests
             client.Dispose();
         }
 
-        // Give the server's heartbeat + disconnect plumbing a chance to evict the
-        // brief connections. The server starts a 5s heartbeat loop, so ClientCount
-        // will only drop once the client closes are observed by the server's receive
-        // loop — that happens on EOF, well before the heartbeat tick.
+        // Eviction is driven by the server's receive loop observing EOF, not by the 5s
+        // heartbeat — so this should resolve in well under a second even at N=100.
         await TestUtil.WaitForAsync(() => server.Server.ClientCount == 0,
             TimeSpan.FromSeconds(10),
             $"Server should have evicted all {N} disposed clients but holds {server.Server.ClientCount}.");

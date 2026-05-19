@@ -188,9 +188,9 @@ public class PublicApiSurfaceTests
         var running = new TestUtil.RunningServer(port, server);
         await Task.Delay(50);
 
-        running.Dispose();   // calls Stop
-        running.Dispose();   // second call must not throw
-        server.Stop();       // direct call after Dispose must not throw
+        running.Dispose();
+        running.Dispose();
+        server.Stop();
     }
 
     [TestMethod]
@@ -199,7 +199,6 @@ public class PublicApiSurfaceTests
         int port = TestUtil.GetFreePort();
         using var server = await TestUtil.StartServerAsync(port);
         var client = TestUtil.CreateClient(port);
-        // ClientId is init-only and defaults to Guid.Empty; just verify the getter works.
         _ = client.ClientId;
         await client.ConnectAsync();
         client.Dispose();
@@ -328,13 +327,11 @@ public class PublicApiSurfaceTests
     }
 
     [TestMethod]
-    public void SbmLogger_GetWithoutInitialization_ReturnsNull()
+    public void SbmLogger_Get_DoesNotThrow()
     {
-        // No factory configured in tests; Get() should not throw.
-        var logger = SbmLogger.Get();
-        // We don't assert null here because another test or framework might have set
-        // it. Just exercise the API.
-        _ = logger;
+        // Other tests in this assembly may have set a logger; we only care that the
+        // accessor itself is safe to call regardless of init state.
+        _ = SbmLogger.Get();
     }
 
     [TestMethod]
@@ -354,7 +351,7 @@ public class PublicApiSurfaceTests
         await t.ConnectAsync();
         t.Close();
         t.Dispose();
-        t.Close(); // safe after dispose
+        t.Close();
     }
 
     [TestMethod]

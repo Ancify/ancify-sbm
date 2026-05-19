@@ -40,9 +40,6 @@ public class ErrorPathTests
         await TestUtil.WaitForAsync(() => server.Server.ClientCount == 1);
 
         client.Dispose();
-        // Send on a disposed stream surfaces ObjectDisposedException from the underlying
-        // NetworkStream. Either subclass of Exception is acceptable here — the contract
-        // is "throws some exception, doesn't silently succeed".
         await Assert.ThrowsExceptionAsync<ObjectDisposedException>(async () =>
             await client.SendAsync(new Message("anything", "x")));
     }
@@ -69,9 +66,6 @@ public class ErrorPathTests
     [TestMethod]
     public async Task MidHandshakeDisconnect_ClientSeesFailureCleanly()
     {
-        // Spin up a raw TCP listener that accepts then immediately closes, without
-        // ever exchanging SBM frames. The client should observe an EOF and exit
-        // cleanly without leaving any background tasks hung.
         int port = TestUtil.GetFreePort();
         var listener = new TcpListener(System.Net.IPAddress.Loopback, port);
         listener.Start();
@@ -83,15 +77,15 @@ public class ErrorPathTests
         });
 
         var client = TestUtil.CreateClient(port);
-        await client.ConnectAsync(); // succeeds — handshake is at the framing layer
+        // ConnectAsync returns once the TCP handshake is done; SBM has no application-
+        // layer handshake, so connect succeeds even though the peer is about to close.
+        await client.ConnectAsync();
 
-        // Send something; either it errors or it succeeds and the next read sees EOF.
-        // Either way the receive loop must exit and Disconnected must fire.
         var statuses = new System.Collections.Concurrent.ConcurrentQueue<ConnectionStatus>();
         client.On<ConnectionStatusEventArgs>(EventType.ConnectionStatusChanged, args => statuses.Enqueue(args.Status));
 
         try { await client.SendAsync(new Message("ping")); }
-        catch { /* race — peer may have closed before send completes */ }
+        catch { /* peer may have closed before the send write completes */ }
 
         await TestUtil.WaitForAsync(() => statuses.Contains(ConnectionStatus.Disconnected),
             TimeSpan.FromSeconds(3));
@@ -104,10 +98,6 @@ public class ErrorPathTests
     [TestMethod]
     public async Task SendDuringReconnect_DoesNotThrow_OnceReconnectCompletes()
     {
-        // While AlwaysReconnect is in progress, the stream is null. SendAsync on a
-        // null stream should throw — verify the client surfaces it cleanly without
-        // crashing the receive loop. After reconnect completes, subsequent sends
-        // must work.
         int port = TestUtil.GetFreePort();
         using var first = await TestUtil.StartServerAsync(port);
 
@@ -123,8 +113,6 @@ public class ErrorPathTests
                 e.ClientSocket.On("after", _ => Task.CompletedTask));
 
         await TestUtil.WaitForAsync(() => second.Server.ClientCount == 1, TimeSpan.FromSeconds(8));
-
-        // A successful send after reconnect proves the client is functional.
         await client.SendAsync(new Message("after"));
 
         client.Dispose();
@@ -146,11 +134,9 @@ public class ErrorPathTests
         await client.ConnectAsync();
         await client.AuthenticateAsync("alice", "key");
 
-        // Throwing handler must not kill the receive loop.
         await client.SendAsync(new Message("boom"));
         await Task.Delay(100);
 
-        // Subsequent messages on a different channel must still be delivered.
         for (int i = 0; i < 5; i++) await client.SendAsync(new Message("ok"));
         await TestUtil.WaitForAsync(() => Volatile.Read(ref goodCount) == 5);
 

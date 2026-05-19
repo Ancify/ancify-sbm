@@ -95,8 +95,6 @@ public class StatusLifecycleTests
     [TestMethod]
     public async Task ConnectFailure_ExhaustingRetries_FiresFailed()
     {
-        // Connect to a port nothing is listening on. With maxRetries small this should
-        // run through to Failed quickly without spinning.
         int port = TestUtil.GetFreePort();
         var transport = TestUtil.CreateClientTransport(port);
         var statuses = new ConcurrentQueue<ConnectionStatus>();
