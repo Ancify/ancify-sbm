@@ -222,10 +222,14 @@ namespace {ns}
             {{");
 
             var assignments = new List<string>();
+            // Order properties by name (ordinal) so generated source is deterministic across
+            // builds. Roslyn's GetMembers() usually follows declaration order but does not
+            // guarantee it, and any non-determinism here busts incremental-compilation caches.
             var props = dtoSymbol
                 .GetMembers()
                 .OfType<IPropertySymbol>()
                 .Where(p => p.SetMethod != null)
+                .OrderBy(p => p.Name, StringComparer.Ordinal)
                 .ToArray();
 
             foreach (var prop in props)
