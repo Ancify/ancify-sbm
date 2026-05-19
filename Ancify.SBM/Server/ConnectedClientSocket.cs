@@ -15,6 +15,7 @@ public class ConnectedClientSocket : SbmSocket
 
     private int _faults = 0;
     private readonly int _maxFaults = 3;
+    private int _disposed = 0;
 
     public ConnectedClientSocket(ITransport transport, ServerSocket server) : base(transport)
     {
@@ -79,6 +80,12 @@ public class ConnectedClientSocket : SbmSocket
 
     public override void Dispose()
     {
+        // Multiple disposal paths converge here (receive-loop exit, heartbeat fault threshold,
+        // explicit server-side disconnect). Without this guard ClientDisconnected fires twice
+        // and any listener tracking client counts ends up double-decrementing.
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         base.Dispose();
         _server.RemoveClient(ClientId);
         _server.OnClientDisconnected(new ClientDisconnectedEventArgs(this));
