@@ -42,12 +42,25 @@ public class SbmSocketConfig
     public int MaxFrameSize { get; set; } = 16 * 1024 * 1024;
 }
 
+/// <summary>
+/// Thrown by SendRequestAsync when the underlying connection drops before a
+/// reply has been received. Callers can distinguish this from a normal
+/// TimeoutException to decide whether to retry immediately or after backoff.
+/// </summary>
+public class ConnectionLostException : Exception
+{
+    public ConnectionLostException() : base("Connection lost before reply was received.") { }
+    public ConnectionLostException(string message) : base(message) { }
+    public ConnectionLostException(string message, Exception inner) : base(message, inner) { }
+}
+
 public abstract class SbmSocket
 {
     protected ITransport _transport;
     protected readonly ConcurrentDictionary<string, ImmutableList<Handler>> _handlers = new();
     protected readonly ConcurrentDictionary<EventType, ImmutableList<Func<object?, Task>>> _eventHandlers = new();
     protected readonly CancellationTokenSource _cts = new();
+    private readonly ConcurrentDictionary<Guid, TaskCompletionSource<Message>> _pendingRequests = new();
 
     public SbmSocketConfig Config { get; set; } = new();
 
@@ -67,6 +80,14 @@ public abstract class SbmSocket
 
     protected virtual void OnConnectionStatusChanged(ConnectionStatusEventArgs e)
     {
+        if (e.Status == ConnectionStatus.Disconnected || e.Status == ConnectionStatus.Failed)
+        {
+            // Pending request awaiters would otherwise sit until their individual timeouts.
+            // Failing them eagerly with a typed exception lets callers distinguish a
+            // dropped connection from a slow peer.
+            FailPendingRequests();
+        }
+
         BroadcastEvent(EventType.ConnectionStatusChanged, e);
     }
 
@@ -374,7 +395,10 @@ public abstract class SbmSocket
         void SafeUnregister()
         {
             if (Interlocked.Exchange(ref unregistered, 1) == 0)
+            {
+                _pendingRequests.TryRemove(replyId, out _);
                 unregister?.Invoke();
+            }
         }
 
         unregister = On($"{request.Channel}_reply_{replyId}", message =>
@@ -385,6 +409,8 @@ public abstract class SbmSocket
                 SafeUnregister();
             }
         });
+
+        _pendingRequests[replyId] = tcs;
 
         try
         {
@@ -398,12 +424,38 @@ public abstract class SbmSocket
 
         if (await Task.WhenAny(tcs.Task, Task.Delay(timeout.Value)) == tcs.Task)
         {
-            return await tcs.Task;
+            try
+            {
+                return await tcs.Task;
+            }
+            finally
+            {
+                SafeUnregister();
+            }
         }
         else
         {
             SafeUnregister();
             throw new TimeoutException("Request timed out.");
+        }
+    }
+
+    /// <summary>
+    /// Fails every in-flight SendRequestAsync with a ConnectionLostException.
+    /// Called automatically when the transport reports Disconnected.
+    /// </summary>
+    protected void FailPendingRequests()
+    {
+        if (_pendingRequests.IsEmpty)
+            return;
+
+        // Drain the map first so concurrent SafeUnregister calls don't race against us.
+        var snapshot = _pendingRequests.ToArray();
+        _pendingRequests.Clear();
+
+        foreach (var kvp in snapshot)
+        {
+            kvp.Value.TrySetException(new ConnectionLostException());
         }
     }
 
