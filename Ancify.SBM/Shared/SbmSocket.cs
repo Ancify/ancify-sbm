@@ -1,4 +1,7 @@
-﻿using Ancify.SBM.Interfaces;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
+
+using Ancify.SBM.Interfaces;
 using Ancify.SBM.Shared.Model.Networking;
 
 using Microsoft.Extensions.Logging;
@@ -42,8 +45,8 @@ public class SbmSocketConfig
 public abstract class SbmSocket
 {
     protected ITransport _transport;
-    protected readonly Dictionary<string, List<Handler>> _handlers = [];
-    protected readonly Dictionary<EventType, List<Func<object?, Task>>> _eventHandlers = [];
+    protected readonly ConcurrentDictionary<string, ImmutableList<Handler>> _handlers = new();
+    protected readonly ConcurrentDictionary<EventType, ImmutableList<Func<object?, Task>>> _eventHandlers = new();
     protected readonly CancellationTokenSource _cts = new();
 
     public SbmSocketConfig Config { get; set; } = new();
@@ -76,9 +79,7 @@ public abstract class SbmSocket
     {
         if (_eventHandlers.TryGetValue(eventType, out var handlers))
         {
-            var handlersCopy = handlers.ToList();
-
-            foreach (var handler in handlersCopy)
+            foreach (var handler in handlers)
             {
                 try
                 {
@@ -142,10 +143,7 @@ public abstract class SbmSocket
                 return;
             }
 
-            // Create a copy of the handlers list to safely iterate over it
-            var handlersCopy = handlers.ToList();
-
-            foreach (var handler in handlersCopy)
+            foreach (var handler in handlers)
             {
                 try
                 {
@@ -197,21 +195,37 @@ public abstract class SbmSocket
     /// <returns>An action that unregisters the handler when called.</returns>
     public Action On(string channel, Func<Message, Task<Message?>> handler, bool isResponseFunc = true)
     {
-        if (!_handlers.TryGetValue(channel, out var handlers))
-        {
-            _handlers[channel] = [];
-            handlers = _handlers[channel];
-        }
         var newHandler = new Handler() { HandlerFunc = handler, IsRespondingHandler = isResponseFunc };
 
-        handlers.Add(newHandler);
+        _handlers.AddOrUpdate(
+            channel,
+            _ => ImmutableList.Create(newHandler),
+            (_, existing) => existing.Add(newHandler));
 
         return () =>
         {
-            handlers.Remove(newHandler);
-            if (handlers.Count == 0)
+            // Atomic remove-by-reference. If concurrent modifications race, retry until our handler
+            // is gone (or never was present, e.g. when called twice).
+            while (true)
             {
-                _handlers.Remove(channel);
+                if (!_handlers.TryGetValue(channel, out var current))
+                    return;
+
+                var updated = current.Remove(newHandler);
+                if (ReferenceEquals(updated, current))
+                    return; // already removed
+
+                if (updated.IsEmpty)
+                {
+                    if (((ICollection<KeyValuePair<string, ImmutableList<Handler>>>)_handlers)
+                        .Remove(new KeyValuePair<string, ImmutableList<Handler>>(channel, current)))
+                        return;
+                }
+                else if (_handlers.TryUpdate(channel, updated, current))
+                {
+                    return;
+                }
+                // someone else mutated the list concurrently; retry
             }
         };
     }
@@ -263,19 +277,32 @@ public abstract class SbmSocket
 
     public Action On(EventType eventType, Func<object?, Task> handler)
     {
-        if (!_eventHandlers.TryGetValue(eventType, out var handlers))
-        {
-            _eventHandlers[eventType] = [];
-            handlers = _eventHandlers[eventType];
-        }
-        handlers.Add(handler);
+        _eventHandlers.AddOrUpdate(
+            eventType,
+            _ => ImmutableList.Create(handler),
+            (_, existing) => existing.Add(handler));
 
         return () =>
         {
-            handlers.Remove(handler);
-            if (handlers.Count == 0)
+            while (true)
             {
-                _eventHandlers.Remove(eventType);
+                if (!_eventHandlers.TryGetValue(eventType, out var current))
+                    return;
+
+                var updated = current.Remove(handler);
+                if (ReferenceEquals(updated, current))
+                    return;
+
+                if (updated.IsEmpty)
+                {
+                    if (((ICollection<KeyValuePair<EventType, ImmutableList<Func<object?, Task>>>>)_eventHandlers)
+                        .Remove(new KeyValuePair<EventType, ImmutableList<Func<object?, Task>>>(eventType, current)))
+                        return;
+                }
+                else if (_eventHandlers.TryUpdate(eventType, updated, current))
+                {
+                    return;
+                }
             }
         };
     }
@@ -339,29 +366,43 @@ public abstract class SbmSocket
         if (_transport == null)
             throw new InvalidOperationException("Transport is not initialized.");
 
-        var tcs = new TaskCompletionSource<Message>();
+        var tcs = new TaskCompletionSource<Message>(TaskCreationOptions.RunContinuationsAsynchronously);
         var replyId = request.MessageId;
 
         Action unregister = null!;
+        int unregistered = 0;
+        void SafeUnregister()
+        {
+            if (Interlocked.Exchange(ref unregistered, 1) == 0)
+                unregister?.Invoke();
+        }
 
         unregister = On($"{request.Channel}_reply_{replyId}", message =>
         {
             if (message.ReplyTo == replyId)
             {
-                tcs.SetResult(message);
-                unregister();
+                tcs.TrySetResult(message);
+                SafeUnregister();
             }
         });
 
-        await SendAsync(request);
+        try
+        {
+            await SendAsync(request);
+        }
+        catch
+        {
+            SafeUnregister();
+            throw;
+        }
 
         if (await Task.WhenAny(tcs.Task, Task.Delay(timeout.Value)) == tcs.Task)
         {
-            return tcs.Task.Result;
+            return await tcs.Task;
         }
         else
         {
-            unregister();
+            SafeUnregister();
             throw new TimeoutException("Request timed out.");
         }
     }
