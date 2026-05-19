@@ -29,6 +29,14 @@ public class Handler
 public class SbmSocketConfig
 {
     public Func<Message, Exception, Message?>? ErrorHandler { get; set; }
+
+    /// <summary>
+    /// Maximum permitted size of a single inbound frame payload in bytes.
+    /// Frames whose length prefix exceeds this value are rejected and the
+    /// connection is closed without allocating the payload buffer. Defaults
+    /// to 16 MiB.
+    /// </summary>
+    public int MaxFrameSize { get; set; } = 16 * 1024 * 1024;
 }
 
 public abstract class SbmSocket
