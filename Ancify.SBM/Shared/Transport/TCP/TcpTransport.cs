@@ -203,6 +203,18 @@ public class TcpTransport : ITransport, IDisposable
                     ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Cancelled));
                     throw new TaskCanceledException("Connection attempt cancelled.");
                 }
+
+                // Recreate the TcpClient before retrying. On Linux .NET,
+                // calling ConnectAsync on the same TcpClient/Socket after a
+                // previous failed attempt throws PlatformNotSupportedException
+                // ("Sockets on this platform are invalid for use after a
+                // failed connection attempt"). The isReconnect=true entry
+                // point already handles this; the per-attempt retry path
+                // must too.
+                _client.Dispose();
+                _client = new TcpClient();
+                _stream = null!;
+                SetupTcpSocket();
             }
             catch (Exception ex)
             {
