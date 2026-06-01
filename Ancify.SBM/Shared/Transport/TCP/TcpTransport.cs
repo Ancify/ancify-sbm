@@ -33,11 +33,30 @@ public class TcpTransport : ITransport, IDisposable
     private bool _isSettingUpSsl = false;
     private readonly SslConfig _sslConfig;
     private readonly SemaphoreSlim _streamWriteLock = new(1, 1);
+    private int _disposed = 0;
+    private int _reconnecting = 0;
 
     public TcpClient Client { get => _client; }
 
     public bool AlwaysReconnect { get; set; }
     public int MaxConnectWaitTime { get; set; } = 60 * 1000;
+
+    /// <summary>
+    /// Maximum permitted size of a single inbound frame payload in bytes.
+    /// Frames whose length prefix exceeds this value (or is negative) cause
+    /// the receive loop to terminate without allocating the payload buffer.
+    /// Defaults to 16 MiB; callers can lower or raise this before connecting.
+    /// </summary>
+    // TODO(config): MaxFrameSize is currently transport-static; wire through SbmSocketConfig.
+    public int MaxFrameSize { get; set; } = 16 * 1024 * 1024;
+
+    /// <summary>
+    /// Per-frame read timeout. Once at least one byte of a frame has begun
+    /// arriving, the rest of the length prefix + payload must arrive within
+    /// this window or the connection is torn down. TimeSpan.Zero disables
+    /// the timeout entirely.
+    /// </summary>
+    public TimeSpan ReadTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
     // Server constructor – accepts an already connected TcpClient
     public TcpTransport(TcpClient client, SslConfig sslConfig)
@@ -202,6 +221,10 @@ public class TcpTransport : ITransport, IDisposable
     public async Task SendAsync(Message message)
     {
         byte[] data = MessagePackSerializer.Serialize(message);
+
+        if (data.Length > MaxFrameSize)
+            throw new InvalidOperationException($"Frame of {data.Length} bytes exceeds MaxFrameSize ({MaxFrameSize}).");
+
         var lengthPrefix = BitConverter.GetBytes(data.Length);
 
         await _streamWriteLock.WaitAsync();
@@ -223,96 +246,227 @@ public class TcpTransport : ITransport, IDisposable
         }
     }
 
-    private static bool AreMessagesEqual(Message original, Message deserialized)
-    {
-        return original.Channel == deserialized.Channel &&
-               Equals(original.Data, deserialized.Data) &&
-               original.ReplyTo == deserialized.ReplyTo &&
-               original.MessageId == deserialized.MessageId &&
-               original.SenderId == deserialized.SenderId &&
-               original.TargetId == deserialized.TargetId;
-    }
-
+    /// <summary>
+    /// Re-establishes the TCP connection with exponential backoff and unbounded retries.
+    /// </summary>
+    /// <remarks>
+    /// Reconnect at the transport level re-establishes the socket only. SBM does not
+    /// retain credentials. Applications using AlwaysReconnect=true must subscribe to
+    /// ConnectionStatusChanged → Reconnected and call AuthenticateAsync again.
+    /// </remarks>
     public async Task Reconnect()
     {
-        await ConnectAsync(
-            maxRetries: int.MaxValue,
-            delayMilliseconds: 100,
-            isReconnect: true
-        );
+        // Coalesce concurrent callers (e.g. external Reconnect() racing the receive
+        // loop's HandleReadLossAsync) so we don't Dispose+rebuild _client twice.
+        // The second caller observes the in-flight reconnect and returns immediately;
+        // when the first caller's ConnectAsync sets a new stream, that's the one
+        // both paths will then use.
+        if (Interlocked.CompareExchange(ref _reconnecting, 1, 0) != 0)
+            return;
+
+        try
+        {
+            await ConnectAsync(
+                maxRetries: int.MaxValue,
+                delayMilliseconds: 100,
+                isReconnect: true
+            );
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _reconnecting, 0);
+        }
     }
 
     public virtual async IAsyncEnumerable<Message> ReceiveAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         while (!_cts.IsCancellationRequested)
         {
-            byte[] lengthPrefix = new byte[4];
-
-            try
+            var frame = await TryReadFrameAsync(cancellationToken);
+            if (frame is null)
             {
-                if (_stream is not null && !_isSettingUpSsl)
-                {
-                    int read = await _stream.ReadAsync(lengthPrefix.AsMemory(0, 4), cancellationToken);
-
-                    if (read == 0)
-                    {
-                        // Connection closed
-                        break;
-                    }
-                }
-                else
-                {
-                    await Task.Delay(10, cancellationToken);
-                    continue;
-                }
+                // Disconnect requested (clean EOF, truncated read, or fatal read error).
+                yield break;
             }
-            catch (Exception ex)
+
+            if (frame.Length == 0)
             {
-                SbmLogger.Get()?.LogError(ex, "Failed to read stream.");
-
-                if (_stream is not null && _client.Client?.Connected != true)
-                {
-                    if (!AlwaysReconnect || _isServer)
-                    {
-                        break;
-                    }
-                    else
-                    {
-
-                        await Reconnect();
-                    }
-                }
-
+                // Transient skip (SSL handshake in progress, recoverable error). Loop and try again.
                 continue;
             }
 
-            int length = BitConverter.ToInt32(lengthPrefix, 0);
-            byte[] data = new byte[length];
-            int totalRead = 0;
-
-            while (totalRead < length)
+            Message message;
+            try
             {
-                int bytesRead = await _stream.ReadAsync(data.AsMemory(totalRead, length - totalRead), cancellationToken);
-                if (bytesRead == 0)
-                {
-                    // Connection closed
-                    break;
-                }
-                totalRead += bytesRead;
+                message = MessagePackSerializer.Deserialize<Message>(frame, cancellationToken: cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                SbmLogger.Get()?.LogError(ex, "Failed to deserialize incoming frame ({Length} bytes); closing connection.", frame.Length);
+                yield break;
             }
 
-            var message = MessagePackSerializer.Deserialize<Message>(data, cancellationToken: cancellationToken);
             yield return message;
         }
     }
 
+    /// <summary>
+    /// Reads a single length-prefixed frame from the stream.
+    /// Returns:
+    ///   null              => terminal: EOF, truncated frame, or unrecoverable error (caller should yield-break).
+    ///   Array.Empty<byte> => transient: nothing to read this turn (SSL setup, reconnect in progress).
+    ///   non-empty byte[]  => a complete frame payload.
+    /// </summary>
+    private async Task<byte[]?> TryReadFrameAsync(CancellationToken cancellationToken)
+    {
+        // Snapshot the stream reference; it can be swapped out during reconnect.
+        var stream = _stream;
+        if (stream is null || _isSettingUpSsl)
+        {
+            try
+            {
+                await Task.Delay(10, cancellationToken);
+            }
+            catch (OperationCanceledException) { return null; }
+            return Array.Empty<byte>();
+        }
+
+        byte[] lengthPrefix = new byte[4];
+        int lengthRead;
+        try
+        {
+            lengthRead = await ReadExactlyAsync(stream, lengthPrefix, 0, 4, cancellationToken);
+        }
+        catch (OperationCanceledException) { return null; }
+        catch (Exception ex)
+        {
+            SbmLogger.Get()?.LogError(ex, "Failed to read frame length prefix.");
+            return await HandleReadLossAsync();
+        }
+
+        if (lengthRead == 0)
+        {
+            // Clean EOF before any bytes — peer closed. Treat as a connection loss so
+            // AlwaysReconnect clients try to reconnect rather than silently exiting.
+            SbmLogger.Get()?.LogInformation("Peer closed connection.");
+            return await HandleReadLossAsync();
+        }
+
+        if (lengthRead < 4)
+        {
+            SbmLogger.Get()?.LogWarning("Connection closed mid length-prefix ({Read}/4 bytes read).", lengthRead);
+            return null;
+        }
+
+        int length = BitConverter.ToInt32(lengthPrefix, 0);
+
+        if (length < 0 || length > MaxFrameSize)
+        {
+            SbmLogger.Get()?.LogError("Rejecting oversize/invalid frame length {Length} (MaxFrameSize={Max}).", length, MaxFrameSize);
+            return null;
+        }
+
+        if (length == 0)
+        {
+            // Zero-length frame is malformed (Message always has fields); reject defensively.
+            SbmLogger.Get()?.LogWarning("Received zero-length frame; closing connection.");
+            return null;
+        }
+
+        byte[] data = new byte[length];
+        int payloadRead;
+        CancellationTokenSource? timeoutCts = null;
+        CancellationTokenSource? linkedCts = null;
+        try
+        {
+            CancellationToken readToken = cancellationToken;
+            if (ReadTimeout > TimeSpan.Zero)
+            {
+                timeoutCts = new CancellationTokenSource(ReadTimeout);
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+                readToken = linkedCts.Token;
+            }
+
+            try
+            {
+                payloadRead = await ReadExactlyAsync(stream, data, 0, length, readToken);
+            }
+            catch (OperationCanceledException) when (timeoutCts is not null && timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                SbmLogger.Get()?.LogWarning("Frame payload read timed out after {Timeout} ({Length} bytes).", ReadTimeout, length);
+                return null;
+            }
+            catch (OperationCanceledException) { return null; }
+            catch (Exception ex)
+            {
+                SbmLogger.Get()?.LogError(ex, "Failed to read frame payload ({Length} bytes).", length);
+                return null;
+            }
+        }
+        finally
+        {
+            linkedCts?.Dispose();
+            timeoutCts?.Dispose();
+        }
+
+        if (payloadRead < length)
+        {
+            SbmLogger.Get()?.LogWarning("Connection closed mid-frame ({Read}/{Expected} bytes); discarding.", payloadRead, length);
+            return null;
+        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// Common path when a read fails or observes EOF. Server-side connections and
+    /// client connections without AlwaysReconnect terminate; client connections
+    /// with AlwaysReconnect signal Disconnected (so SbmSocket can fail in-flight
+    /// requests) and attempt to reconnect.
+    /// </summary>
+    private async Task<byte[]?> HandleReadLossAsync()
+    {
+        if (_isServer || !AlwaysReconnect)
+            return null;
+
+        // Surface the loss so SbmSocket fails pending requests. The follow-up Reconnect
+        // call will subsequently fire Reconnecting → Reconnected via ConnectAsync.
+        ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
+
+        // Tear down the old client socket; ConnectAsync(isReconnect:true) will rebuild it.
+        try { _stream?.Dispose(); } catch { }
+        _stream = null!;
+
+        try { await Reconnect(); }
+        catch (Exception rex)
+        {
+            SbmLogger.Get()?.LogError(rex, "Reconnect failed.");
+            return null;
+        }
+        return Array.Empty<byte>();
+    }
+
+    private static async Task<int> ReadExactlyAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    {
+        int totalRead = 0;
+        while (totalRead < count)
+        {
+            int n = await stream.ReadAsync(buffer.AsMemory(offset + totalRead, count - totalRead), cancellationToken);
+            if (n == 0) break; // EOF
+            totalRead += n;
+        }
+        return totalRead;
+    }
+
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         GC.SuppressFinalize(this);
-        _cts?.Cancel();
-        _stream?.Dispose();
-        _client?.Close();
-        //ConnectionStatusChanged?.Invoke(this, new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
+        try { _cts?.Cancel(); } catch { }
+        try { _stream?.Dispose(); } catch { }
+        try { _client?.Close(); } catch { }
     }
 
     public void Close()

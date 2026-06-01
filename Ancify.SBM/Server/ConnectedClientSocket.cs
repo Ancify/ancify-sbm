@@ -3,6 +3,8 @@ using Ancify.SBM.Shared;
 using Ancify.SBM.Shared.Model;
 using Ancify.SBM.Shared.Model.Networking;
 
+using Microsoft.Extensions.Logging;
+
 namespace Ancify.SBM.Server;
 
 public class ConnectedClientSocket : SbmSocket
@@ -15,6 +17,7 @@ public class ConnectedClientSocket : SbmSocket
 
     private int _faults = 0;
     private readonly int _maxFaults = 3;
+    private int _disposed = 0;
 
     public ConnectedClientSocket(ITransport transport, ServerSocket server) : base(transport)
     {
@@ -30,13 +33,22 @@ public class ConnectedClientSocket : SbmSocket
         {
             AuthStatus = AuthStatus.Authenticating;
 
-            var data = message.AsTypeless();
+            string? id = null, key = null, scope = null;
+            try
+            {
+                var data = message.AsTypeless();
+                id = TryGetString(data, "Id");
+                key = TryGetString(data, "Key");
+                scope = TryGetString(data, "Scope");
+            }
+            catch (Exception ex)
+            {
+                SbmLogger.Get()?.LogWarning(ex, "Malformed auth payload from client {ClientId}.", ClientId);
+                AuthStatus = AuthStatus.Failed;
+                return Message.FromReply(message, new { Success = false });
+            }
 
-            var id = (string)data["Id"];
-            var key = (string)data["Key"];
-            var scope = (string)data["Scope"];
-
-            var handlerTask = _server.AuthHandler?.Invoke(id, key, scope);
+            var handlerTask = _server.AuthHandler?.Invoke(id ?? string.Empty, key ?? string.Empty, scope ?? string.Empty);
 
             if (handlerTask is not null)
             {
@@ -64,6 +76,13 @@ public class ConnectedClientSocket : SbmSocket
         });
     }
 
+    private static string? TryGetString(IReadOnlyDictionary<object, object> data, string key)
+    {
+        if (!data.TryGetValue(key, out var raw) || raw is null)
+            return null;
+        return raw as string ?? raw.ToString();
+    }
+
     protected override Task<bool> IsMessageAllowedAsync(Message message)
     {
         return DisallowAnonymous && !IsAuthenticated() && message.Channel != "_auth_"
@@ -79,6 +98,12 @@ public class ConnectedClientSocket : SbmSocket
 
     public override void Dispose()
     {
+        // Multiple disposal paths converge here (receive-loop exit, heartbeat fault threshold,
+        // explicit server-side disconnect). Without this guard ClientDisconnected fires twice
+        // and any listener tracking client counts ends up double-decrementing.
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         base.Dispose();
         _server.RemoveClient(ClientId);
         _server.OnClientDisconnected(new ClientDisconnectedEventArgs(this));
@@ -179,15 +204,17 @@ public class ConnectedClientSocket : SbmSocket
     {
         try
         {
-            await SendRequestAsync(new Message("__$status"));
-            _faults = 0;
+            // Short timeout: heartbeats should respond promptly. The previous 15s default
+            // meant three consecutive missed heartbeats could take 45+ seconds to detect.
+            await SendRequestAsync(new Message("__$status"), TimeSpan.FromSeconds(2));
+            Interlocked.Exchange(ref _faults, 0);
         }
         catch
         {
             // This will close the connection, no need to retry from the server
-            _faults++;
+            int current = Interlocked.Increment(ref _faults);
 
-            if (_faults >= _maxFaults)
+            if (current >= _maxFaults)
             {
                 OnConnectionStatusChanged(new ConnectionStatusEventArgs(ConnectionStatus.Disconnected));
             }

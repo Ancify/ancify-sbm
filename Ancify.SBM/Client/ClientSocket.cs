@@ -23,14 +23,46 @@ public class ClientSocket : SbmSocket
         await _transport!.ConnectAsync();
 
     }
+
+    /// <summary>
+    /// Sends an _auth_ frame and updates AuthStatus based on the server's reply.
+    /// </summary>
+    /// <remarks>
+    /// Reconnect at the transport level re-establishes the socket only. SBM does not
+    /// retain credentials. Applications using AlwaysReconnect=true must subscribe to
+    /// ConnectionStatusChanged → Reconnected and call AuthenticateAsync again.
+    /// </remarks>
     public async Task<bool> AuthenticateAsync(string id, string key, string? scope = null)
     {
+        AuthStatus = AuthStatus.Authenticating;
+
         var message = new Message("_auth_", new { Id = id, Key = key, Scope = scope });
-        var response = await SendRequestAsync(message);
+        Message response;
+        try
+        {
+            response = await SendRequestAsync(message);
+        }
+        catch
+        {
+            AuthStatus = AuthStatus.Failed;
+            throw;
+        }
 
-        var data = response.AsTypeless();
+        bool success = false;
+        try
+        {
+            var data = response.AsTypeless();
+            if (data.TryGetValue("Success", out var raw) && raw is bool b)
+                success = b;
+        }
+        catch
+        {
+            // Malformed auth reply: treat as failure rather than throwing
+            // InvalidCastException out of a method whose contract is bool.
+            success = false;
+        }
 
-        var success = (bool)data["Success"];
+        AuthStatus = success ? AuthStatus.Authenticated : AuthStatus.Failed;
 
         if (success)
         {

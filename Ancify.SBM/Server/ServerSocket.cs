@@ -65,7 +65,7 @@ public class ServerSocket
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
-        CheckConnectionStatus();
+        _ = Task.Run(() => CheckConnectionStatusLoop(cancellationToken), cancellationToken);
 
         try
         {
@@ -126,26 +126,47 @@ public class ServerSocket
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
+                    TcpClient tcpClient;
                     try
                     {
-                        var tcpClient = await _tcpListener.AcceptTcpClientAsync(cancellationToken);
-                        var transport = new TcpTransport(tcpClient, _sslConfig);
-                        await transport.SetupServerStream();
-
-                        var clientSocket = new ConnectedClientSocket(transport, this)
-                        {
-                            ClientId = Guid.NewGuid(),
-                            DisallowAnonymous = AnonymousDisallowed,
-                            Config = ServerConfig
-                        };
-
-                        _clients[clientSocket.ClientId] = clientSocket;
-                        ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
+                        tcpClient = await _tcpListener.AcceptTcpClientAsync(cancellationToken);
                     }
+                    catch (OperationCanceledException) { break; }
                     catch (Exception ex)
                     {
-                        SbmLogger.Get()?.LogError(ex, "Unexpected exception on client connection.");
+                        SbmLogger.Get()?.LogError(ex, "Unexpected exception accepting TCP client.");
+                        continue;
                     }
+
+                    // Move the (potentially slow) SSL handshake off the accept loop so that
+                    // a stuck or malicious client cannot block other connections from being
+                    // accepted. Failures during handshake must close the underlying socket
+                    // to avoid leaking the TcpClient.
+                    _ = Task.Run(async () =>
+                    {
+                        TcpTransport? transport = null;
+                        try
+                        {
+                            transport = new TcpTransport(tcpClient, _sslConfig);
+                            await transport.SetupServerStream();
+
+                            var clientSocket = new ConnectedClientSocket(transport, this)
+                            {
+                                ClientId = Guid.NewGuid(),
+                                DisallowAnonymous = AnonymousDisallowed,
+                                Config = ServerConfig
+                            };
+
+                            _clients[clientSocket.ClientId] = clientSocket;
+                            ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
+                        }
+                        catch (Exception ex)
+                        {
+                            SbmLogger.Get()?.LogError(ex, "Failed to set up incoming client; closing connection.");
+                            try { transport?.Close(); } catch { }
+                            try { tcpClient.Close(); } catch { }
+                        }
+                    }, cancellationToken);
                 }
             }
         }
@@ -153,29 +174,76 @@ public class ServerSocket
         {
             SbmLogger.Get()?.LogError(ex, "Unexpected when attempting to start listening.");
         }
+        finally
+        {
+            // Cancellation only stops the accept loop body. The OS listener stays
+            // bound until we explicitly stop/dispose it, which means callers can't
+            // restart a server on the same port until the process exits. Release
+            // the listener as part of shutdown.
+            try { _tcpListener?.Stop(); } catch { }
+            try { _httpListener?.Close(); } catch { }
+        }
     }
 
-    public async void CheckConnectionStatus()
+    /// <summary>
+    /// Stops the server's listener and disconnects all currently-connected clients.
+    /// Safe to call multiple times.
+    /// </summary>
+    public void Stop()
     {
-        while (true)
+        try { _tcpListener?.Stop(); } catch { }
+        try { _httpListener?.Close(); } catch { }
+
+        foreach (var client in _clients.Values.ToArray())
+        {
+            try { client.Dispose(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Backwards-compatibility shim: in previous versions this method launched the
+    /// per-client heartbeat loop. StartAsync now starts it automatically, so this
+    /// method is a no-op preserved only so external callers continue to compile.
+    /// </summary>
+    [Obsolete("ServerSocket starts the heartbeat loop automatically in StartAsync; this method is a no-op and will be removed in a future version.")]
+    public void CheckConnectionStatus() { /* no-op */ }
+
+    private async Task CheckConnectionStatusLoop(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                foreach (var (id, client) in _clients)
+                var snapshot = _clients.Values.ToArray();
+                if (snapshot.Length > 0)
                 {
-                    try
+                    var parallelOptions = new ParallelOptions
                     {
-                        await client.CheckConnectionStatus();
-                    }
-                    catch { }
+                        CancellationToken = cancellationToken,
+                        MaxDegreeOfParallelism = Math.Min(8, snapshot.Length)
+                    };
+
+                    await Parallel.ForEachAsync(snapshot, parallelOptions, async (client, ct) =>
+                    {
+                        try { await client.CheckConnectionStatus(); }
+                        catch (Exception ex)
+                        {
+                            SbmLogger.Get()?.LogDebug(ex, "CheckConnectionStatus failed for client {ClientId}.", client.ClientId);
+                        }
+                    });
                 }
             }
-            catch
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
             {
-
+                SbmLogger.Get()?.LogError(ex, "Unexpected error in connection status loop.");
             }
 
-            await Task.Delay(5 * 1000);
+            try
+            {
+                await Task.Delay(5 * 1000, cancellationToken);
+            }
+            catch (OperationCanceledException) { break; }
         }
     }
 

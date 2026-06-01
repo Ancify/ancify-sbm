@@ -1,4 +1,7 @@
-﻿using Ancify.SBM.Interfaces;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
+
+using Ancify.SBM.Interfaces;
 using Ancify.SBM.Shared.Model.Networking;
 
 using Microsoft.Extensions.Logging;
@@ -29,14 +32,43 @@ public class Handler
 public class SbmSocketConfig
 {
     public Func<Message, Exception, Message?>? ErrorHandler { get; set; }
+
+    /// <summary>
+    /// Maximum permitted size of a single inbound frame payload in bytes.
+    /// Frames whose length prefix exceeds this value are rejected and the
+    /// connection is closed without allocating the payload buffer. Defaults
+    /// to 16 MiB.
+    /// </summary>
+    public int MaxFrameSize { get; set; } = 16 * 1024 * 1024;
+
+    /// <summary>
+    /// Per-frame inbound read timeout. If no byte of a length prefix or payload
+    /// is observed within this window, the receive loop tears the connection
+    /// down rather than waiting for OS TCP keepalive (which is minutes-to-hours
+    /// on Windows by default). Defaults to 60s.
+    /// </summary>
+    public TimeSpan ReadTimeout { get; set; } = TimeSpan.FromSeconds(60);
+}
+
+/// <summary>
+/// Thrown by SendRequestAsync when the underlying connection drops before a
+/// reply has been received. Callers can distinguish this from a normal
+/// TimeoutException to decide whether to retry immediately or after backoff.
+/// </summary>
+public class ConnectionLostException : Exception
+{
+    public ConnectionLostException() : base("Connection lost before reply was received.") { }
+    public ConnectionLostException(string message) : base(message) { }
+    public ConnectionLostException(string message, Exception inner) : base(message, inner) { }
 }
 
 public abstract class SbmSocket
 {
     protected ITransport _transport;
-    protected readonly Dictionary<string, List<Handler>> _handlers = [];
-    protected readonly Dictionary<EventType, List<Func<object?, Task>>> _eventHandlers = [];
+    protected readonly ConcurrentDictionary<string, ImmutableList<Handler>> _handlers = new();
+    protected readonly ConcurrentDictionary<EventType, ImmutableList<Func<object?, Task>>> _eventHandlers = new();
     protected readonly CancellationTokenSource _cts = new();
+    private readonly ConcurrentDictionary<Guid, TaskCompletionSource<Message>> _pendingRequests = new();
 
     public SbmSocketConfig Config { get; set; } = new();
 
@@ -56,6 +88,14 @@ public abstract class SbmSocket
 
     protected virtual void OnConnectionStatusChanged(ConnectionStatusEventArgs e)
     {
+        if (e.Status == ConnectionStatus.Disconnected || e.Status == ConnectionStatus.Failed)
+        {
+            // Pending request awaiters would otherwise sit until their individual timeouts.
+            // Failing them eagerly with a typed exception lets callers distinguish a
+            // dropped connection from a slow peer.
+            FailPendingRequests();
+        }
+
         BroadcastEvent(EventType.ConnectionStatusChanged, e);
     }
 
@@ -68,9 +108,7 @@ public abstract class SbmSocket
     {
         if (_eventHandlers.TryGetValue(eventType, out var handlers))
         {
-            var handlersCopy = handlers.ToList();
-
-            foreach (var handler in handlersCopy)
+            foreach (var handler in handlers)
             {
                 try
                 {
@@ -106,7 +144,6 @@ public abstract class SbmSocket
                     }
                     catch (Exception ex)
                     {
-                        //Console.WriteLine($"An exception occured while handling the message: {ex.Message}");
                         SbmLogger.Get()?.LogError(ex, "An exception occured while handling the message.");
                     }
                 }
@@ -132,12 +169,10 @@ public abstract class SbmSocket
             if (!await IsMessageAllowedAsync(message))
             {
                 SbmLogger.Get()?.LogInformation("Rejected message on channel {Channel} from client {SenderId}", message.Channel, message.SenderId);
+                return;
             }
 
-            // Create a copy of the handlers list to safely iterate over it
-            var handlersCopy = handlers.ToList();
-
-            foreach (var handler in handlersCopy)
+            foreach (var handler in handlers)
             {
                 try
                 {
@@ -189,21 +224,37 @@ public abstract class SbmSocket
     /// <returns>An action that unregisters the handler when called.</returns>
     public Action On(string channel, Func<Message, Task<Message?>> handler, bool isResponseFunc = true)
     {
-        if (!_handlers.TryGetValue(channel, out var handlers))
-        {
-            _handlers[channel] = [];
-            handlers = _handlers[channel];
-        }
         var newHandler = new Handler() { HandlerFunc = handler, IsRespondingHandler = isResponseFunc };
 
-        handlers.Add(newHandler);
+        _handlers.AddOrUpdate(
+            channel,
+            _ => ImmutableList.Create(newHandler),
+            (_, existing) => existing.Add(newHandler));
 
         return () =>
         {
-            handlers.Remove(newHandler);
-            if (handlers.Count == 0)
+            // Atomic remove-by-reference. If concurrent modifications race, retry until our handler
+            // is gone (or never was present, e.g. when called twice).
+            while (true)
             {
-                _handlers.Remove(channel);
+                if (!_handlers.TryGetValue(channel, out var current))
+                    return;
+
+                var updated = current.Remove(newHandler);
+                if (ReferenceEquals(updated, current))
+                    return; // already removed
+
+                if (updated.IsEmpty)
+                {
+                    if (((ICollection<KeyValuePair<string, ImmutableList<Handler>>>)_handlers)
+                        .Remove(new KeyValuePair<string, ImmutableList<Handler>>(channel, current)))
+                        return;
+                }
+                else if (_handlers.TryUpdate(channel, updated, current))
+                {
+                    return;
+                }
+                // someone else mutated the list concurrently; retry
             }
         };
     }
@@ -255,19 +306,32 @@ public abstract class SbmSocket
 
     public Action On(EventType eventType, Func<object?, Task> handler)
     {
-        if (!_eventHandlers.TryGetValue(eventType, out var handlers))
-        {
-            _eventHandlers[eventType] = [];
-            handlers = _eventHandlers[eventType];
-        }
-        handlers.Add(handler);
+        _eventHandlers.AddOrUpdate(
+            eventType,
+            _ => ImmutableList.Create(handler),
+            (_, existing) => existing.Add(handler));
 
         return () =>
         {
-            handlers.Remove(handler);
-            if (handlers.Count == 0)
+            while (true)
             {
-                _eventHandlers.Remove(eventType);
+                if (!_eventHandlers.TryGetValue(eventType, out var current))
+                    return;
+
+                var updated = current.Remove(handler);
+                if (ReferenceEquals(updated, current))
+                    return;
+
+                if (updated.IsEmpty)
+                {
+                    if (((ICollection<KeyValuePair<EventType, ImmutableList<Func<object?, Task>>>>)_eventHandlers)
+                        .Remove(new KeyValuePair<EventType, ImmutableList<Func<object?, Task>>>(eventType, current)))
+                        return;
+                }
+                else if (_eventHandlers.TryUpdate(eventType, updated, current))
+                {
+                    return;
+                }
             }
         };
     }
@@ -331,30 +395,75 @@ public abstract class SbmSocket
         if (_transport == null)
             throw new InvalidOperationException("Transport is not initialized.");
 
-        var tcs = new TaskCompletionSource<Message>();
+        var tcs = new TaskCompletionSource<Message>(TaskCreationOptions.RunContinuationsAsynchronously);
         var replyId = request.MessageId;
 
         Action unregister = null!;
+        int unregistered = 0;
+        void SafeUnregister()
+        {
+            if (Interlocked.Exchange(ref unregistered, 1) == 0)
+            {
+                _pendingRequests.TryRemove(replyId, out _);
+                unregister?.Invoke();
+            }
+        }
 
         unregister = On($"{request.Channel}_reply_{replyId}", message =>
         {
             if (message.ReplyTo == replyId)
             {
-                tcs.SetResult(message);
-                unregister();
+                tcs.TrySetResult(message);
+                SafeUnregister();
             }
         });
 
-        await SendAsync(request);
+        _pendingRequests[replyId] = tcs;
+
+        try
+        {
+            await SendAsync(request);
+        }
+        catch
+        {
+            SafeUnregister();
+            throw;
+        }
 
         if (await Task.WhenAny(tcs.Task, Task.Delay(timeout.Value)) == tcs.Task)
         {
-            return tcs.Task.Result;
+            try
+            {
+                return await tcs.Task;
+            }
+            finally
+            {
+                SafeUnregister();
+            }
         }
         else
         {
-            unregister();
+            SafeUnregister();
             throw new TimeoutException("Request timed out.");
+        }
+    }
+
+    /// <summary>
+    /// Fails every in-flight SendRequestAsync with a ConnectionLostException.
+    /// Called automatically when the transport reports Disconnected.
+    /// </summary>
+    protected void FailPendingRequests()
+    {
+        if (_pendingRequests.IsEmpty)
+            return;
+
+        // Drain the map first so concurrent SafeUnregister calls don't race against us.
+        var snapshot = _pendingRequests.ToArray();
+        _pendingRequests.Clear();
+
+        foreach (var kvp in snapshot)
+        {
+            kvp.Value.TrySetException(new ConnectionLostException());
         }
     }
 
