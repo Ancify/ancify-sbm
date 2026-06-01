@@ -61,7 +61,28 @@ public class ConnectedClientSocket : SbmSocket
 
                     if (!result.IsConnectionAllowed)
                     {
+                        // Send the typed Success=false reply BEFORE closing.
+                        // If we close first and return the reply, the outer
+                        // SbmSocket.HandleMessageAsync tries to SendAsync on a
+                        // disposed NetworkStream and the client sees a bare
+                        // socket drop instead of an auth-rejected reply.
+                        // Mirrors the python port's fix (sdk finding #2).
+                        var rejectReply = Message.FromReply(message, new { Success = false });
+                        rejectReply.ReplyTo = message.MessageId;
+                        rejectReply.TargetId = message.SenderId;
+                        rejectReply.SenderId = ClientId;
+                        try
+                        {
+                            if (_transport != null)
+                                await _transport.SendAsync(rejectReply);
+                        }
+                        catch (Exception ex)
+                        {
+                            SbmLogger.Get()?.LogDebug(ex, "Failed to send auth-reject reply before close.");
+                        }
+
                         _transport?.Close();
+                        return null;
                     }
 
                     return Message.FromReply(message, new { Success = false });

@@ -36,10 +36,6 @@ public class AuthTests
     {
         int port = TestUtil.GetFreePort();
         using var serverCts = new CancellationTokenSource();
-        // Use Success=false but IsConnectionAllowed=true so the server returns the reply
-        // before closing the connection. M6 (a race between sending the auth reply and
-        // closing the transport when IsConnectionAllowed=false) is a known deferred
-        // issue; this test focuses on the AuthStatus=Failed path, not that race.
         var server = TestUtil.CreateServer(port, (_, _, _) =>
             Task.FromResult(new AuthContext { Success = false, IsConnectionAllowed = true }));
         _ = server.StartAsync(serverCts.Token);
@@ -50,6 +46,31 @@ public class AuthTests
         var ok = await client.AuthenticateAsync("alice", "wrong");
 
         Assert.IsFalse(ok);
+        Assert.AreEqual(AuthStatus.Failed, client.AuthStatus);
+
+        client.Dispose();
+        serverCts.Cancel();
+    }
+
+    [TestMethod]
+    public async Task AuthenticateAsync_RejectWithConnectionDisallowed_StillDeliversTypedReply()
+    {
+        // SDK finding #2 / M6 regression: previously the server closed the transport
+        // before sending the Success=false reply when IsConnectionAllowed=false, so the
+        // outer dispatcher hit ObjectDisposedException on SendAsync and the client saw
+        // a bare drop instead of a typed auth-rejected reply.
+        int port = TestUtil.GetFreePort();
+        using var serverCts = new CancellationTokenSource();
+        var server = TestUtil.CreateServer(port, (_, _, _) =>
+            Task.FromResult(new AuthContext { Success = false, IsConnectionAllowed = false }));
+        _ = server.StartAsync(serverCts.Token);
+        await Task.Delay(50);
+
+        var client = TestUtil.CreateClient(port);
+        await client.ConnectAsync();
+        var ok = await client.AuthenticateAsync("alice", "wrong");
+
+        Assert.IsFalse(ok, "Client must observe a typed false reply, not a connection drop.");
         Assert.AreEqual(AuthStatus.Failed, client.AuthStatus);
 
         client.Dispose();
