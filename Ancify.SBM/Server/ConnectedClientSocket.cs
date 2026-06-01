@@ -61,7 +61,28 @@ public class ConnectedClientSocket : SbmSocket
 
                     if (!result.IsConnectionAllowed)
                     {
+                        // Send the typed Success=false reply BEFORE closing.
+                        // If we close first and return the reply, the outer
+                        // SbmSocket.HandleMessageAsync tries to SendAsync on a
+                        // disposed NetworkStream and the client sees a bare
+                        // socket drop instead of an auth-rejected reply.
+                        // Mirrors the python port's fix (sdk finding #2).
+                        var rejectReply = Message.FromReply(message, new { Success = false });
+                        rejectReply.ReplyTo = message.MessageId;
+                        rejectReply.TargetId = message.SenderId;
+                        rejectReply.SenderId = ClientId;
+                        try
+                        {
+                            if (_transport != null)
+                                await _transport.SendAsync(rejectReply);
+                        }
+                        catch (Exception ex)
+                        {
+                            SbmLogger.Get()?.LogDebug(ex, "Failed to send auth-reject reply before close.");
+                        }
+
                         _transport?.Close();
+                        return null;
                     }
 
                     return Message.FromReply(message, new { Success = false });
@@ -119,6 +140,11 @@ public class ConnectedClientSocket : SbmSocket
         }
     }
 
+    // Scope used by portal (DevApp4) connections. When a client connects with this scope,
+    // guards fall back to role-based authorization instead of scope matching, because
+    // the coordinator populates Context.Roles from the user's Keycloak realm roles.
+    public const string PortalScope = "portal";
+
     public void AuthenticationGuard(string? role = null, string? scope = null)
     {
         if (!IsAuthenticated() || !Context.Success)
@@ -133,6 +159,11 @@ public class ConnectedClientSocket : SbmSocket
 
         if (scope is not null && scope != Context.Scope)
         {
+            // Portal clients satisfy scope requirements via their Keycloak roles instead of
+            // their declared scope. A portal user with the matching role passes the guard.
+            if (Context.Scope == PortalScope && Context.Roles.Contains(scope))
+                return;
+
             throw new UnauthorizedAccessException("Client does not have required scope.");
         }
     }
@@ -145,7 +176,18 @@ public class ConnectedClientSocket : SbmSocket
         }
 
         bool hasValidRole = roles is null || roles.Any(Context.Roles.Contains);
-        bool hasValidScope = scopes is null || scopes.Any(scope => scope == Context.Scope);
+
+        // Portal clients: check whether the user holds any of the requested scopes as a role,
+        // rather than requiring the declared scope to match one of the accepted scope strings.
+        bool hasValidScope;
+        if (Context.Scope == PortalScope)
+        {
+            hasValidScope = scopes is null || scopes.Any(s => Context.Roles.Contains(s));
+        }
+        else
+        {
+            hasValidScope = scopes is null || scopes.Any(scope => scope == Context.Scope);
+        }
 
         if (!hasValidRole && !hasValidScope)
         {
@@ -161,7 +203,17 @@ public class ConnectedClientSocket : SbmSocket
         }
 
         bool hasAllRoles = roles is null || roles.All(Context.Roles.Contains);
-        bool hasAllScopes = scopes is null || scopes.All(scope => scope == Context.Scope);
+
+        // Portal clients: each required scope must be present as a role.
+        bool hasAllScopes;
+        if (Context.Scope == PortalScope)
+        {
+            hasAllScopes = scopes is null || scopes.All(s => Context.Roles.Contains(s));
+        }
+        else
+        {
+            hasAllScopes = scopes is null || scopes.All(scope => scope == Context.Scope);
+        }
 
         if (!hasAllRoles || !hasAllScopes)
         {
