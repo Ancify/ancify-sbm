@@ -162,6 +162,13 @@ public abstract class SbmSocket
         return Task.FromResult(true);
     }
 
+    // Process-wide channel-dispatch tap. Subscribers receive (channel, success)
+    // after each handler invocation completes; success is false when the handler
+    // threw. Used by host applications (e.g. the AMDS coordinator's wire inspector)
+    // to count per-channel invocations and error rates without modifying every
+    // SetupClient site.
+    public static event Action<string, bool>? ChannelInvoked;
+
     protected virtual async Task HandleMessageAsync(Message message)
     {
         if (_handlers.TryGetValue(message.Channel, out var handlers))
@@ -174,14 +181,19 @@ public abstract class SbmSocket
 
             foreach (var handler in handlers)
             {
+                bool handlerSucceeded = false;
                 try
                 {
                     var responseTask = handler.HandlerFunc?.Invoke(message);
 
                     if (responseTask is null)
+                    {
+                        handlerSucceeded = true;
                         continue;
+                    }
 
                     var response = await responseTask;
+                    handlerSucceeded = true;
 
                     if (response != null)
                     {
@@ -211,6 +223,11 @@ public abstract class SbmSocket
                                 await _transport.SendAsync(response);
                         }
                     }
+                }
+                finally
+                {
+                    try { ChannelInvoked?.Invoke(message.Channel, handlerSucceeded); }
+                    catch { /* swallow subscriber errors; never break dispatch */ }
                 }
             }
         }
