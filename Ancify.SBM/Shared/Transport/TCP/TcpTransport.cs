@@ -152,7 +152,7 @@ public class TcpTransport : ITransport, IDisposable
         {
             try
             {
-                await _client.ConnectAsync(_host, _port);
+                await ConnectClientToResolvedHostAsync(_cts.Token);
                 var networkStream = _client.GetStream();
 
                 if (_sslConfig.SslEnabled)
@@ -223,6 +223,58 @@ public class TcpTransport : ITransport, IDisposable
                 throw;
             }
         }
+    }
+
+    /// <summary>
+    /// Resolves <see cref="_host"/> to its address list and attempts each address in
+    /// turn on a freshly-built <see cref="TcpClient"/>. Returns once one address
+    /// connects; throws the last <see cref="SocketException"/> if all addresses fail.
+    /// </summary>
+    /// <remarks>
+    /// Replaces a plain <c>TcpClient.ConnectAsync(host, port)</c> call, which on
+    /// Linux .NET throws <see cref="PlatformNotSupportedException"/> ("Sockets on
+    /// this platform are invalid for use after a failed connection attempt") when
+    /// the host resolves to multiple addresses (commonly an AAAA record alongside
+    /// the A record) and the first address fails: the framework's internal
+    /// MultipleConnectAsync retries the next address on the same socket, which the
+    /// kernel refuses. We resolve manually and rebuild the socket between attempts.
+    /// </remarks>
+    private async Task ConnectClientToResolvedHostAsync(CancellationToken cancellationToken)
+    {
+        IPAddress[] addresses;
+        if (IPAddress.TryParse(_host, out var parsed))
+        {
+            addresses = new[] { parsed };
+        }
+        else
+        {
+            addresses = await Dns.GetHostAddressesAsync(_host, cancellationToken);
+            if (addresses.Length == 0)
+                throw new SocketException((int)SocketError.HostNotFound);
+        }
+
+        SocketException? lastException = null;
+        foreach (var address in addresses)
+        {
+            try
+            {
+                await _client.ConnectAsync(address, _port, cancellationToken);
+                return;
+            }
+            catch (SocketException ex)
+            {
+                lastException = ex;
+                SbmLogger.Get()?.LogDebug(ex, "Connect to {Host} ({Address}):{Port} failed; trying next address.", _host, address, _port);
+            }
+
+            // Always rebuild on failure (even after the last address) so the field
+            // is left in a usable state for the outer retry loop or the caller.
+            _client.Dispose();
+            _client = new TcpClient();
+            SetupTcpSocket();
+        }
+
+        throw lastException!;
     }
 
     public void OnAuthenticated()
