@@ -102,6 +102,12 @@ public class ServerSocket
                             };
 
                             _clients[clientSocket.ClientId] = clientSocket;
+
+                            // See TCP path: the receive loop starts in the ctor, so a client that
+                            // closes immediately can dispose before this insert. Evict the ghost.
+                            if (clientSocket.IsDisposed)
+                                _clients.TryRemove(clientSocket.ClientId, out _);
+
                             ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
                         }
                         catch (Exception ex)
@@ -158,6 +164,14 @@ public class ServerSocket
                             };
 
                             _clients[clientSocket.ClientId] = clientSocket;
+
+                            // The receive loop is started inside the ctor above. A client that
+                            // closes immediately can dispose (and call RemoveClient) before this
+                            // insert runs, which would leave a permanent ghost entry. Re-check and
+                            // evict if the socket already tore itself down.
+                            if (clientSocket.IsDisposed)
+                                _clients.TryRemove(clientSocket.ClientId, out _);
+
                             ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
                         }
                         catch (Exception ex)

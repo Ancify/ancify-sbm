@@ -19,6 +19,14 @@ public class ConnectedClientSocket : SbmSocket
     private readonly int _maxFaults = 3;
     private int _disposed = 0;
 
+    /// <summary>
+    /// True once <see cref="Dispose"/> has run. The receive loop starts inside the
+    /// constructor, so a peer that closes immediately can dispose this socket before
+    /// the server has finished registering it. The server uses this to detect and
+    /// evict such a client rather than leaking a ghost entry in its client map.
+    /// </summary>
+    public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
     public ConnectedClientSocket(ITransport transport, ServerSocket server) : base(transport)
     {
         Context = new();
