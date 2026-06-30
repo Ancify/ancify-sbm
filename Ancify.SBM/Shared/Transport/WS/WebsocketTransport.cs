@@ -144,10 +144,21 @@ public class WebsocketTransport : ITransport, IDisposable
 
             do
             {
-                if (socket.State is WebSocketState.None or WebSocketState.Connecting)
+                var state = socket.State;
+                if (state is WebSocketState.None or WebSocketState.Connecting)
                 {
+                    // The client receive loop is started (in the ClientSocket ctor) before ConnectAsync
+                    // completes — wait for the socket to reach Open rather than receiving on it.
                     await Task.Delay(10, cancellationToken);
                     continue;
+                }
+                if (state is not WebSocketState.Open)
+                {
+                    // Aborted / Closed / CloseSent / CloseReceived: the socket is dead (e.g. a failed
+                    // connect attempt left a ClientWebSocket Aborted). End the loop cleanly so SbmSocket
+                    // raises Disconnected and the client reconnects — calling ReceiveAsync here would
+                    // throw "The WebSocket is not connected".
+                    yield break;
                 }
                 result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
                 isEndOfMessage = result.EndOfMessage;
