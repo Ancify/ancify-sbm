@@ -64,6 +64,68 @@ public class AuthScenarioTests
     }
 
     [TestMethod]
+    public async Task AuthenticationGuardAny_RolesOnly_RejectsWhenNoRoleMatches()
+    {
+        // Regression guard: a single-argument GuardAny(roles: …) must actually enforce the
+        // roles. It historically could never throw (the unsupplied scopes dimension defaulted
+        // to "satisfied"), which silently admitted any authenticated principal.
+        int port = TestUtil.GetFreePort();
+        ConnectedClientSocket? serverClient = null;
+        using var server = await TestUtil.StartServerAsync(port,
+            authHandler: (id, _, _) => Task.FromResult(new AuthContext(id, new List<string> { "viewer" })),
+            configure: s => s.ClientConnected += (_, e) => serverClient = (ConnectedClientSocket)e.ClientSocket);
+
+        var client = TestUtil.CreateClient(port);
+        await client.ConnectAsync();
+        await client.AuthenticateAsync("alice", "k");
+        await TestUtil.WaitForAsync(() => serverClient is not null && serverClient.IsAuthenticated());
+
+        Assert.ThrowsException<UnauthorizedAccessException>(
+            () => serverClient!.AuthenticationGuardAny(roles: new[] { "admin" }));
+        client.Dispose();
+    }
+
+    [TestMethod]
+    public async Task AuthenticationGuardAny_ScopesOnly_RejectsWhenNeitherScopeNorRoleMatches()
+    {
+        int port = TestUtil.GetFreePort();
+        ConnectedClientSocket? serverClient = null;
+        using var server = await TestUtil.StartServerAsync(port,
+            authHandler: (id, _, _) => Task.FromResult(new AuthContext(id, new List<string> { "viewer" }, scope: "tenant-a")),
+            configure: s => s.ClientConnected += (_, e) => serverClient = (ConnectedClientSocket)e.ClientSocket);
+
+        var client = TestUtil.CreateClient(port);
+        await client.ConnectAsync();
+        await client.AuthenticateAsync("alice", "k", scope: "tenant-a");
+        await TestUtil.WaitForAsync(() => serverClient is not null && serverClient.IsAuthenticated());
+
+        Assert.ThrowsException<UnauthorizedAccessException>(
+            () => serverClient!.AuthenticationGuardAny(scopes: new[] { "admin", "dev" }));
+        client.Dispose();
+    }
+
+    [TestMethod]
+    public async Task AuthenticationGuardAny_ScopesOnly_PassesWhenRequestedScopeHeldAsRole()
+    {
+        // API-key / portal principals carry authority in Context.Roles under a generic scope
+        // ("apikey" / "portal"); a scope guard must accept them when they hold the scope name
+        // as a role. This is the case the strict fix must NOT regress.
+        int port = TestUtil.GetFreePort();
+        ConnectedClientSocket? serverClient = null;
+        using var server = await TestUtil.StartServerAsync(port,
+            authHandler: (id, _, _) => Task.FromResult(new AuthContext(id, new List<string> { "hoster" }, scope: "apikey")),
+            configure: s => s.ClientConnected += (_, e) => serverClient = (ConnectedClientSocket)e.ClientSocket);
+
+        var client = TestUtil.CreateClient(port);
+        await client.ConnectAsync();
+        await client.AuthenticateAsync("alice", "k", scope: "apikey");
+        await TestUtil.WaitForAsync(() => serverClient is not null && serverClient.IsAuthenticated());
+
+        serverClient!.AuthenticationGuardAny(scopes: new[] { "hoster", "dev" }); // no throw
+        client.Dispose();
+    }
+
+    [TestMethod]
     public async Task AuthenticationGuardAll_FailsIfAnyRoleMissing()
     {
         int port = TestUtil.GetFreePort();

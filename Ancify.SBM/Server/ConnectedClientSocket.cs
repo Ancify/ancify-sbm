@@ -183,21 +183,26 @@ public class ConnectedClientSocket : SbmSocket
             throw new UnauthorizedAccessException("Not authenticated.");
         }
 
-        bool hasValidRole = roles is null || roles.Any(Context.Roles.Contains);
-
-        // Portal clients: check whether the user holds any of the requested scopes as a role,
-        // rather than requiring the declared scope to match one of the accepted scope strings.
-        bool hasValidScope;
-        if (Context.Scope == PortalScope)
+        // No constraint supplied at all: authenticated is sufficient (see AuthenticationGuard()).
+        if (roles is null && scopes is null)
         {
-            hasValidScope = scopes is null || scopes.Any(s => Context.Roles.Contains(s));
-        }
-        else
-        {
-            hasValidScope = scopes is null || scopes.Any(scope => scope == Context.Scope);
+            return;
         }
 
-        if (!hasValidRole && !hasValidScope)
+        // A SUPPLIED dimension must actually be satisfied; an UNSUPPLIED dimension must not
+        // vacuously pass. The historical bug let it: with `scopes` null, `hasValidScope`
+        // defaulted to true, so a single-argument call (e.g. GuardAny(roles: [...])) could
+        // never throw and admitted any authenticated session regardless of its roles.
+        bool roleMatches = roles is not null && roles.Any(Context.Roles.Contains);
+
+        // A principal may satisfy a scope requirement either by its declared scope OR by
+        // holding the requested scope as a role. The role fallback covers portal sessions
+        // (scope:"portal") and API-key sessions (scope:"apikey"), which both carry their
+        // authority in Context.Roles rather than in a matching scope string.
+        bool scopeMatches = scopes is not null
+            && (scopes.Any(s => s == Context.Scope) || scopes.Any(Context.Roles.Contains));
+
+        if (!roleMatches && !scopeMatches)
         {
             throw new UnauthorizedAccessException("Client does not have any of the required roles or scopes.");
         }
