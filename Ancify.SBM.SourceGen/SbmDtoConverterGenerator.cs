@@ -253,7 +253,14 @@ namespace {ns}
                 }
                 else
                 {
-                    if (!isNullable)
+                    // Only non-required, non-nullable REFERENCE types treat a missing key as an
+                    // error. Non-required value types fall through to `default` (Guid.Empty, 0,
+                    // false, ...) so senders may omit them — matching C# object-initializer
+                    // semantics and the SBM wire convention of emit-only-when-set optional
+                    // fields (e.g. AMDS Entry.Id is server-assigned and omitted on submit by the
+                    // py/ts SDKs). Must-have fields should be marked `required`, which always
+                    // throws when absent.
+                    if (!isNullable && !prop.Type.IsValueType)
                     {
                         snippet = $@"
                     TryGetValueIgnoreCase(data, ""{propName}"", ignoreCasing, out var {propName}Value)
