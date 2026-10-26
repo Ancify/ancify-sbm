@@ -53,9 +53,17 @@ public class Message
         return (T)Data!;
     }
 
+    /// <summary>
+    /// The payload as an object-keyed map, whatever map types the sender used (a
+    /// <c>Dictionary&lt;string, object?&gt;</c> arrives string-keyed). <see cref="Data"/> is
+    /// left as received; a payload that needs converting is returned as a deep copy.
+    /// </summary>
     public IReadOnlyDictionary<object, object> AsTypeless()
     {
-        return (IReadOnlyDictionary<object, object>)Data!;
+        if (Data is null) return null!;
+        return TypelessMap.Normalize(Data) as IReadOnlyDictionary<object, object>
+            ?? throw new InvalidCastException(
+                $"Unable to cast object of type '{Data.GetType()}' to type '{typeof(IReadOnlyDictionary<object, object>)}'.");
     }
 
     public bool SenderIsServer()
