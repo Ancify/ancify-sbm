@@ -57,6 +57,32 @@ public class HandlerRegistrationOrderTests
         }
     }
 
+    [TestMethod]
+    public async Task ServerSocket_DeliversFirstRequestAfterAuth_ToHandlersRegisteredInClientConnected()
+    {
+        // A slow ClientConnected subscriber stands in for an application's SetupClient. With a
+        // synchronous auth handler, the client gets its auth reply and sends its first request
+        // while that subscriber is still registering; the request must still reach it.
+        var port = TestUtil.GetFreePort();
+        using var running = await TestUtil.StartServerAsync(port,
+            authHandler: (id, _, _) => Task.FromResult(new AuthContext(id)),
+            configure: server => server.ClientConnected += (_, e) =>
+            {
+                Thread.Sleep(300);
+                e.ClientSocket.On("app::echo", message => Message.FromReply(message, new { Ok = true }));
+            });
+
+        var client = TestUtil.CreateClient(port);
+        try
+        {
+            await client.ConnectAsync();
+            Assert.IsTrue(await client.AuthenticateAsync("alice", "k"));
+            var reply = await client.SendRequestAsync(new Message("app::echo"), TimeSpan.FromSeconds(2));
+            Assert.AreEqual(true, reply.AsTypeless()["Ok"]);
+        }
+        finally { client.Dispose(); }
+    }
+
     private sealed class PreloadedTransport(Message preloaded) : ITransport
     {
         private readonly TaskCompletionSource<Message> _firstSent = new(TaskCreationOptions.RunContinuationsAsynchronously);

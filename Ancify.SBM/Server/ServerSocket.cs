@@ -89,30 +89,25 @@ public class ServerSocket
 
                     if (context.Request.IsWebSocketRequest)
                     {
+                        ConnectedClientSocket? wsClient = null;
                         try
                         {
                             // Accept the WebSocket upgrade request.
                             var wsContext = await context.AcceptWebSocketAsync(subProtocol: null);
                             var transport = new WebsocketTransport(wsContext.WebSocket);
-                            var clientSocket = new ConnectedClientSocket(transport, this)
+                            wsClient = new ConnectedClientSocket(transport, this, startReceiving: false)
                             {
                                 ClientId = Guid.NewGuid(),
                                 DisallowAnonymous = AnonymousDisallowed,
                                 Config = ServerConfig
                             };
 
-                            _clients[clientSocket.ClientId] = clientSocket;
-
-                            // See TCP path: the receive loop starts in the ctor, so a client that
-                            // closes immediately can dispose before this insert. Evict the ghost.
-                            if (clientSocket.IsDisposed)
-                                _clients.TryRemove(clientSocket.ClientId, out _);
-
-                            ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
+                            AdmitClient(wsClient);
                         }
                         catch (Exception ex)
                         {
                             SbmLogger.Get()?.LogError(ex, "Failed to accept WebSocket connection.");
+                            try { wsClient?.Dispose(); } catch { }
                             context.Response.StatusCode = 500;
                             context.Response.Close();
                         }
@@ -151,32 +146,25 @@ public class ServerSocket
                     _ = Task.Run(async () =>
                     {
                         TcpTransport? transport = null;
+                        ConnectedClientSocket? clientSocket = null;
                         try
                         {
                             transport = new TcpTransport(tcpClient, _sslConfig);
                             await transport.SetupServerStream();
 
-                            var clientSocket = new ConnectedClientSocket(transport, this)
+                            clientSocket = new ConnectedClientSocket(transport, this, startReceiving: false)
                             {
                                 ClientId = Guid.NewGuid(),
                                 DisallowAnonymous = AnonymousDisallowed,
                                 Config = ServerConfig
                             };
 
-                            _clients[clientSocket.ClientId] = clientSocket;
-
-                            // The receive loop is started inside the ctor above. A client that
-                            // closes immediately can dispose (and call RemoveClient) before this
-                            // insert runs, which would leave a permanent ghost entry. Re-check and
-                            // evict if the socket already tore itself down.
-                            if (clientSocket.IsDisposed)
-                                _clients.TryRemove(clientSocket.ClientId, out _);
-
-                            ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
+                            AdmitClient(clientSocket);
                         }
                         catch (Exception ex)
                         {
                             SbmLogger.Get()?.LogError(ex, "Failed to set up incoming client; closing connection.");
+                            try { clientSocket?.Dispose(); } catch { }
                             try { transport?.Close(); } catch { }
                             try { tcpClient.Close(); } catch { }
                         }
@@ -197,6 +185,20 @@ public class ServerSocket
             try { _tcpListener?.Stop(); } catch { }
             try { _httpListener?.Close(); } catch { }
         }
+    }
+
+    /// <summary>
+    /// Registers a freshly built client, lets <see cref="ClientConnected"/> subscribers set up
+    /// their channel handlers, and only then starts receiving. Starting earlier let a client's
+    /// first request after a fast auth reply arrive before those handlers and be dropped. The
+    /// socket cannot tear itself down before its receive loop runs, so there is no ghost entry
+    /// to evict, and a peer that closes at once raises ClientDisconnected after ClientConnected.
+    /// </summary>
+    private void AdmitClient(ConnectedClientSocket clientSocket)
+    {
+        _clients[clientSocket.ClientId] = clientSocket;
+        ClientConnected?.Invoke(this, new ClientConnectedEventArgs(clientSocket));
+        clientSocket.StartReceiving();
     }
 
     /// <summary>

@@ -27,7 +27,18 @@ public class ConnectedClientSocket : SbmSocket
     /// </summary>
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
-    public ConnectedClientSocket(ITransport transport, ServerSocket server) : base(transport)
+    public ConnectedClientSocket(ITransport transport, ServerSocket server)
+        : this(transport, server, startReceiving: true)
+    {
+    }
+
+    /// <summary>
+    /// <see cref="ServerSocket"/> passes <c>startReceiving: false</c> and starts the loop
+    /// itself once <see cref="ServerSocket.ClientConnected"/> subscribers have registered
+    /// their channel handlers, so a client's first request after auth cannot arrive before
+    /// them and be dropped.
+    /// </summary>
+    internal ConnectedClientSocket(ITransport transport, ServerSocket server, bool startReceiving) : base(transport)
     {
         Context = new();
         _server = server;
@@ -35,7 +46,8 @@ public class ConnectedClientSocket : SbmSocket
         // _auth_ frame is usually already buffered, so registering after it starts can
         // drop that frame unanswered.
         SetupAuthHandlers();
-        StartReceiving();
+        if (startReceiving)
+            StartReceiving();
     }
 
     private void SetupAuthHandlers()
