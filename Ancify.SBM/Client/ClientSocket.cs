@@ -8,8 +8,9 @@ public class ClientSocket : SbmSocket
 {
     public ClientSocket(ITransport transport) : base(transport)
     {
-        StartReceiving();
+        // Handlers first, so a frame dispatched as soon as receiving starts finds them.
         SetupHandlers();
+        StartReceiving();
     }
 
     private void SetupHandlers()

@@ -31,8 +31,11 @@ public class ConnectedClientSocket : SbmSocket
     {
         Context = new();
         _server = server;
-        StartReceiving();
+        // Handlers first: the receive loop dispatches on a pool thread, and a client's
+        // _auth_ frame is usually already buffered, so registering after it starts can
+        // drop that frame unanswered.
         SetupAuthHandlers();
+        StartReceiving();
     }
 
     private void SetupAuthHandlers()
