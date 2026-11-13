@@ -52,6 +52,12 @@ public class ConnectedClientSocket : SbmSocket
 
     private void SetupAuthHandlers()
     {
+        // Answer client-initiated liveness probes (the AMDS SDKs' health probe sends
+        // __$status to the server). Without this the probe always times out and the
+        // SDK reports the connection unhealthy. The server's own heartbeat replies
+        // arrive on __$status_reply_{id}, so this handler never sees them.
+        On("__$status", message => Message.FromReply(message, new { Success = true }));
+
         On("_auth_", async message =>
         {
             AuthStatus = AuthStatus.Authenticating;

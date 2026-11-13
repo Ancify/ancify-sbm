@@ -83,6 +83,26 @@ public class HandlerRegistrationOrderTests
         finally { client.Dispose(); }
     }
 
+    [TestMethod]
+    public async Task ServerSocket_AnswersClientInitiatedStatusProbe()
+    {
+        // The AMDS SDKs probe health by sending __$status to the server; before the
+        // server registered a responder, every probe timed out.
+        var port = TestUtil.GetFreePort();
+        using var running = await TestUtil.StartServerAsync(port,
+            authHandler: (id, _, _) => Task.FromResult(new AuthContext(id)));
+
+        var client = TestUtil.CreateClient(port);
+        try
+        {
+            await client.ConnectAsync();
+            Assert.IsTrue(await client.AuthenticateAsync("alice", "k"));
+            var reply = await client.SendRequestAsync(new Message("__$status"), TimeSpan.FromSeconds(2));
+            Assert.AreEqual(true, reply.AsTypeless()["Success"]);
+        }
+        finally { client.Dispose(); }
+    }
+
     private sealed class PreloadedTransport(Message preloaded) : ITransport
     {
         private readonly TaskCompletionSource<Message> _firstSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
